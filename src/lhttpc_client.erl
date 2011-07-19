@@ -105,9 +105,11 @@ execute(From, Host, Port, Ssl, Path, Method, Hdrs, Body, Options) ->
     PartialDownloadOptions = proplists:get_value(partial_download, Options, []),
     ConnectOptions = proplists:get_value(connect_options, Options, []),
     NormalizedMethod = lhttpc_lib:normalize_method(Method),
+    MaxConnections = proplists:get_value(max_connections, Options, 10),
+    ConnectionTimeout = proplists:get_value(connection_timeout, Options, infinity),
     {ChunkedUpload, Request} = lhttpc_lib:format_request(Path, NormalizedMethod,
         Hdrs, Host, Port, Body, PartialUpload),
-    LbRequest = {lb, Host, Port, Ssl},
+    LbRequest = {lb, Host, Port, Ssl, MaxConnections, ConnectionTimeout},
     {ok, Lb} = gen_server:call(lhttpc_manager, LbRequest, infinity),
     State = #client_state{
         host = Host,
@@ -149,8 +151,9 @@ send_request(#client_state{attempts = 0}) ->
     throw(connection_closed);
 send_request(#client_state{socket = undefined} = State) ->
     ConnectOptions = State#client_state.connect_options,
+    ConnectTimeout = State#client_state.connect_timeout,
     Lb = State#client_state.load_balancer,
-    SocketRequest = {socket, self(), ConnectOptions},
+    SocketRequest = {socket, self(), ConnectOptions, ConnectTimeout},
     case gen_server:call(Lb, SocketRequest, infinity) of
         {ok, Socket} ->
             send_request(State#client_state{socket = Socket});

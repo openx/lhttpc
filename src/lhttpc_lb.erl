@@ -18,10 +18,10 @@
         host :: string(),
         port = 80 :: integer(),
         ssl = false :: true | false,
+        max_connections = 10 :: non_neg_integer(),
+        connection_timeout = 300000 :: non_neg_integer(),
         sockets = dict:new(),
-        idle_sockets = queue:new(),
-        timeout = 1000000 :: non_neg_integer(),
-        max_sockets = 10 :: non_neg_integer()
+        available_sockets = queue:new()
     }).
 
 %% @spec (any()) -> {ok, pid()}
@@ -29,27 +29,27 @@
 %% This is normally called by a supervisor.
 %% @end
 -spec start_link(any()) -> {ok, pid()}.
-start_link(Args) ->
-    gen_server:start_link(?MODULE, Args, []).
+start_link([Dest, Opts]) ->
+    gen_server:start_link(?MODULE, [Dest, Opts], []).
 
 %% @hidden
 -spec init(any()) -> {ok, #httpc_man{}}.
-init({Host, Port, Ssl}) ->
+init([{Host, Port, Ssl}, {MaxConnections, ConnectionTimeout}]) ->
     process_flag(priority, high),
-    {ok, Timeout} = application:get_env(lhttpc, connection_timeout),
     State = #httpc_man{
         host = Host,
         port = Port,
         ssl = Ssl,
-        timeout = Timeout
+        max_connections = MaxConnections,
+        connection_timeout = ConnectionTimeout
     },
     {ok, State}.
 
 %% @hidden
 -spec handle_call(any(), any(), #httpc_man{}) ->
     {reply, any(), #httpc_man{}}.
-handle_call({socket, Pid, ConnectOptions}, _, State) ->
-    {Reply, NewState} = find_socket(Pid, ConnectOptions, State),
+handle_call({socket, Pid, ConnectOptions, ConnectTimeout}, _, State) ->
+    {Reply, NewState} = find_socket(Pid, ConnectOptions, ConnectTimeout, State),
     {reply, Reply, NewState};
 handle_call(_, _, State) ->
     {reply, {error, unknown_request}, State}.
@@ -65,8 +65,6 @@ handle_cast({remove, Socket}, State) ->
 handle_cast({terminate}, State) ->
     terminate(undefined, State),
     {noreply, State};
-handle_cast({update_timeout, Milliseconds}, State) ->
-    {noreply, State#httpc_man{timeout = Milliseconds}};
 handle_cast(_, State) ->
     {noreply, State}.
 
@@ -99,11 +97,11 @@ terminate(_, State) ->
 code_change(_, State, _) ->
     State.
 
-find_socket(Pid, ConnectOptions, State) ->
+find_socket(Pid, ConnectOptions, ConnectTimeout, State) ->
     Host = State#httpc_man.host,
     Port = State#httpc_man.port,
     Ssl = State#httpc_man.ssl,
-    Q1 = State#httpc_man.idle_sockets,
+    Q1 = State#httpc_man.available_sockets,
     case queue:out(Q1) of
         {{value, Socket}, Q2} ->
             lhttpc_sock:setopts(Socket, [{active, false}], Ssl),
@@ -112,30 +110,29 @@ find_socket(Pid, ConnectOptions, State) ->
                     Timer = dict:fetch(Socket, State#httpc_man.sockets),
                     cancel_timer(Timer, Socket),
                     NewState = State#httpc_man{
-                        idle_sockets = Q2
+                        available_sockets = Q2
                     },
                     {{ok, Socket}, NewState};
                 {error, badarg} ->
                     lhttpc_sock:setopts(Socket, [{active, once}], Ssl),
                     NewState = State#httpc_man{
-                        idle_sockets = queue:in(Socket, Q2)
+                        available_sockets = queue:in(Socket, Q2)
                     },
                     {{error, no_pid}, NewState};
                 {error, _Reason} ->
                     NewState = State#httpc_man{
-                        idle_sockets = Q2
+                        available_sockets = Q2
                     },
-                    find_socket(Pid, ConnectOptions, remove_socket(Socket, NewState))
+                    find_socket(Pid, ConnectOptions, ConnectTimeout, remove_socket(Socket, NewState))
             end;
         {empty, _Q2} ->
-            MaxSockets = State#httpc_man.max_sockets,
+            MaxSockets = State#httpc_man.max_connections,
             case MaxSockets > dict:size(State#httpc_man.sockets) of
                 true ->
-                    Timeout = State#httpc_man.timeout,
                     SocketOptions = [binary, {packet, http}, {active, false} | ConnectOptions],
-                    case lhttpc_sock:connect(Host, Port, SocketOptions, 1000, Ssl) of
+                    case lhttpc_sock:connect(Host, Port, SocketOptions, ConnectTimeout, Ssl) of
                         {ok, Socket} ->
-                            find_socket(Pid, ConnectOptions, store_socket(Socket, State));
+                            find_socket(Pid, ConnectOptions, ConnectTimeout, store_socket(Socket, State));
                         {error, etimedout} ->
                             {{error, sys_timeout}, State};
                         {error, timeout} ->
@@ -161,11 +158,16 @@ remove_socket(Socket, State) ->
     end.
 
 store_socket(Socket, State) ->
-    Timeout = State#httpc_man.timeout,
-    Timer = erlang:send_after(Timeout, self(), {timeout, Socket}),
+    Timeout = State#httpc_man.connection_timeout,
+    Timer = case Timeout of
+        infinity ->
+            undefined;
+        _Other ->
+            erlang:send_after(Timeout, self(), {timeout, Socket})
+        end,
     lhttpc_sock:setopts(Socket, [{active, once}], State#httpc_man.ssl),
     State#httpc_man{
-        idle_sockets = queue:in(Socket, State#httpc_man.idle_sockets),
+        available_sockets = queue:in(Socket, State#httpc_man.available_sockets),
         sockets = dict:store(Socket, Timer, State#httpc_man.sockets)
     }.
 
@@ -175,6 +177,8 @@ close_sockets(Sockets, Ssl) ->
                 erlang:cancel_timer(Timer)
         end, dict:to_list(Sockets)).
 
+cancel_timer(undefined, _Socket) ->
+    ok;
 cancel_timer(Timer, Socket) ->
     case erlang:cancel_timer(Timer) of
         false ->

@@ -70,8 +70,8 @@ init(_) ->
 %% @hidden
 -spec handle_call(any(), any(), #httpc_man{}) ->
     {reply, any(), #httpc_man{}}.
-handle_call({lb, Host, Port, Ssl}, _, State) ->
-    {Reply, NewState} = find_lb({Host, Port, Ssl}, State),
+handle_call({lb, Host, Port, Ssl, MaxConnections, ConnectionTimeout}, _, State) ->
+    {Reply, NewState} = find_lb({Host, Port, Ssl}, {MaxConnections, ConnectionTimeout}, State),
     {reply, Reply, NewState};
 handle_call(_, _, State) ->
     {reply, {error, unknown_request}, State}.
@@ -96,13 +96,13 @@ terminate(_, State) ->
 code_change(_, State, _) ->
     State.
 
-find_lb(Dest, State) ->
+find_lb(Dest, Options, State) ->
     Dests = State#httpc_man.destinations,
     case dict:find(Dest, Dests) of
         {ok, Lb} ->
             {{ok, Lb}, State};
         error ->
-            {ok, Pid} = lhttpc_lb:start_link(Dest),
+            {ok, Pid} = lhttpc_lb:start_link([Dest, Options]),
             NewState = State#httpc_man{
                 destinations = update_dest(Dest, Pid, Dests)
             },
