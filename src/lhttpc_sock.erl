@@ -1,7 +1,7 @@
 %%% ----------------------------------------------------------------------------
 %%% Copyright (c) 2009, Erlang Training and Consulting Ltd.
 %%% All rights reserved.
-%%% 
+%%%
 %%% Redistribution and use in source and binary forms, with or without
 %%% modification, are permitted provided that the following conditions are met:
 %%%    * Redistributions of source code must retain the above copyright
@@ -12,7 +12,7 @@
 %%%    * Neither the name of Erlang Training and Consulting Ltd. nor the
 %%%      names of its contributors may be used to endorse or promote products
 %%%      derived from this software without specific prior written permission.
-%%% 
+%%%
 %%% THIS SOFTWARE IS PROVIDED BY Erlang Training and Consulting Ltd. ''AS IS''
 %%% AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
 %%% IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
@@ -63,6 +63,7 @@
 connect(Host, Port, Options, Timeout, true) ->
     ssl:connect(Host, Port, Options, Timeout);
 connect(Host, Port, Options, Timeout, false) ->
+    error_logger:error_report([connect, Host, Port, Options, Timeout]),
     gen_tcp:connect(Host, Port, Options, Timeout).
 
 %% @spec (Socket, SslFlag) -> {ok, Data} | {error, Reason}
@@ -81,7 +82,11 @@ connect(Host, Port, Options, Timeout, false) ->
 recv(Socket, true) ->
     ssl:recv(Socket, 0);
 recv(Socket, false) ->
-    gen_tcp:recv(Socket, 0).
+    % error_logger:error_report([recv, Socket]),
+    % error_logger:error_report([inet_db, inet_db:lookup_socket(Socket)]),
+    X = inet_tcp:recv(Socket, 0),
+    error_logger:error_report(X),
+    X.
 
 %% @spec (Socket, Length, SslFlag) -> {ok, Data} | {error, Reason}
 %%   Socket = socket()
@@ -99,6 +104,7 @@ recv(_, 0, _) ->
 recv(Socket, Length, true) ->
     ssl:recv(Socket, Length);
 recv(Socket, Length, false) ->
+    error_logger:error_report([rcv, Socket, Length]),
     gen_tcp:recv(Socket, Length).
 
 %% @spec (Socket, Data, SslFlag) -> ok | {error, Reason}
@@ -115,6 +121,7 @@ recv(Socket, Length, false) ->
 send(Socket, Request, true) ->
     ssl:send(Socket, Request);
 send(Socket, Request, false) ->
+    error_logger:error_report([send, Socket, Request]),
     gen_tcp:send(Socket, Request).
 
 %% @spec (Socket, Pid, SslFlag) -> ok | {error, Reason}
@@ -130,6 +137,8 @@ send(Socket, Request, false) ->
 controlling_process(Socket, Pid, true) ->
     ssl:controlling_process(Socket, Pid);
 controlling_process(Socket, Pid, false) ->
+    error_logger:error_report([controlling_process, Socket, Pid]),
+    error_logger:error_report(process_info(Pid)),
     gen_tcp:controlling_process(Socket, Pid).
 
 %% @spec (Socket, Options, SslFlag) -> ok | {error, Reason}
@@ -145,6 +154,7 @@ controlling_process(Socket, Pid, false) ->
 setopts(Socket, Options, true) ->
     ssl:setopts(Socket, Options);
 setopts(Socket, Options, false) ->
+    error_logger:error_report([setopts, Socket, Options]),
     inet:setopts(Socket, Options).
 
 %% @spec (Socket, SslFlag) -> ok | {error, Reason}
@@ -158,4 +168,5 @@ setopts(Socket, Options, false) ->
 close(Socket, true) ->
     ssl:close(Socket);
 close(Socket, false) ->
+    error_logger:error_report([close, socket]),
     gen_tcp:close(Socket).

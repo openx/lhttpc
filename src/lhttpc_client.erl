@@ -45,6 +45,7 @@
         method :: string(),
         request :: iolist(),
         request_headers :: headers(),
+        load_balancer:: pid(),
         socket,
         connect_timeout = infinity :: timeout(),
         connect_options = [] :: [any()],
@@ -102,14 +103,12 @@ execute(From, Host, Port, Ssl, Path, Method, Hdrs, Body, Options) ->
     PartialUpload = proplists:is_defined(partial_upload, Options),
     PartialDownload = proplists:is_defined(partial_download, Options),
     PartialDownloadOptions = proplists:get_value(partial_download, Options, []),
+    ConnectOptions = proplists:get_value(connect_options, Options, []),
     NormalizedMethod = lhttpc_lib:normalize_method(Method),
     {ChunkedUpload, Request} = lhttpc_lib:format_request(Path, NormalizedMethod,
         Hdrs, Host, Port, Body, PartialUpload),
-    SocketRequest = {socket, self(), Host, Port, Ssl},
-    Socket = case gen_server:call(lhttpc_manager, SocketRequest, infinity) of
-        {ok, S}   -> S; % Re-using HTTP/1.1 connections
-        no_socket -> undefined % Opening a new HTTP/1.1 connection
-    end,
+    LbRequest = {lb, Host, Port, Ssl},
+    {ok, Lb} = gen_server:call(lhttpc_manager, LbRequest, infinity),
     State = #client_state{
         host = Host,
         port = Port,
@@ -118,10 +117,10 @@ execute(From, Host, Port, Ssl, Path, Method, Hdrs, Body, Options) ->
         request = Request,
         requester = From,
         request_headers = Hdrs,
-        socket = Socket,
+        load_balancer = Lb,
         connect_timeout = proplists:get_value(connect_timeout, Options,
             infinity),
-        connect_options = proplists:get_value(connect_options, Options, []),
+        connect_options = ConnectOptions,
         attempts = 1 + proplists:get_value(send_retry, Options, 1),
         partial_upload = PartialUpload,
         upload_window = UploadWindowSize,
@@ -136,19 +135,9 @@ execute(From, Host, Port, Ssl, Path, Method, Hdrs, Body, Options) ->
         {R, undefined} ->
             {ok, R};
         {R, NewSocket} ->
-            % The socket we ended up doing the request over is returned
-            % here, it might be the same as Socket, but we don't know.
-            % I've noticed that we don't want to give send sockets that we
-            % can't change the controlling process for to the manager. This
-            % really shouldn't fail, but it could do if:
-            % * The socket was closed remotely already
-            % * Due to an error in this module (returning dead sockets for
-            %   instance)
-            ManagerPid = whereis(lhttpc_manager),
-            case lhttpc_sock:controlling_process(NewSocket, ManagerPid, Ssl) of
+            case lhttpc_sock:controlling_process(NewSocket, Lb, Ssl) of
                 ok ->
-                    gen_server:cast(lhttpc_manager,
-                        {done, Host, Port, Ssl, NewSocket});
+                    gen_server:cast(Lb, {store, NewSocket});
                 _ ->
                     ok
             end,
@@ -157,45 +146,37 @@ execute(From, Host, Port, Ssl, Path, Method, Hdrs, Body, Options) ->
     {response, self(), Response}.
 
 send_request(#client_state{attempts = 0}) ->
-    % Don't try again if the number of allowed attempts is 0.
     throw(connection_closed);
 send_request(#client_state{socket = undefined} = State) ->
-    Host = State#client_state.host,
-    Port = State#client_state.port,
-    Ssl = State#client_state.ssl,
-    Timeout = State#client_state.connect_timeout,
     ConnectOptions = State#client_state.connect_options,
-    SocketOptions = [binary, {packet, http}, {active, false} | ConnectOptions],
-    case lhttpc_sock:connect(Host, Port, SocketOptions, Timeout, Ssl) of
+    Lb = State#client_state.load_balancer,
+    SocketRequest = {socket, self(), ConnectOptions},
+    case gen_server:call(Lb, SocketRequest, infinity) of
         {ok, Socket} ->
             send_request(State#client_state{socket = Socket});
-        {error, etimedout} ->
-            % TCP stack decided to give up
-            throw(connect_timeout);
-        {error, timeout} ->
-            throw(connect_timeout);
         {error, Reason} ->
-            erlang:error(Reason)
+            throw(Reason)
     end;
 send_request(State) ->
+    Lb = State#client_state.load_balancer,
     Socket = State#client_state.socket,
     Ssl = State#client_state.ssl,
     Request = State#client_state.request,
     case lhttpc_sock:send(Socket, Request, Ssl) of
         ok ->
             if
-                State#client_state.partial_upload     -> partial_upload(State);
+                State#client_state.partial_upload -> partial_upload(State);
                 not State#client_state.partial_upload -> read_response(State)
             end;
         {error, closed} ->
-            lhttpc_sock:close(Socket, Ssl),
+            gen_server:cast(Lb, {remove, Socket}),
             NewState = State#client_state{
                 socket = undefined,
                 attempts = State#client_state.attempts - 1
             },
             send_request(NewState);
         {error, Reason} ->
-            lhttpc_sock:close(Socket, Ssl),
+            gen_server:cast(Lb, {remove, Socket}),
             erlang:error(Reason)
     end.
 
@@ -242,8 +223,8 @@ encode_body_part(#client_state{chunked_upload = false}, Data) ->
 
 check_send_result(_State, ok) ->
     ok;
-check_send_result(#client_state{socket = Sock, ssl = Ssl}, {error, Reason}) ->
-    lhttpc_sock:close(Sock, Ssl),
+check_send_result(#client_state{socket = Socket, load_balancer = Lb}, {error, Reason}) ->
+    gen_server:cast(Lb, {remove, Socket}),
     throw(Reason).
 
 read_response(#client_state{socket = Socket, ssl = Ssl} = State) ->
@@ -251,6 +232,7 @@ read_response(#client_state{socket = Socket, ssl = Ssl} = State) ->
     read_response(State, nil, {nil, nil}, []).
 
 read_response(State, Vsn, {StatusCode, _} = Status, Hdrs) ->
+    Lb = State#client_state.load_balancer,
     Socket = State#client_state.socket,
     Ssl = State#client_state.ssl,
     case lhttpc_sock:recv(Socket, Ssl) of
@@ -281,14 +263,19 @@ read_response(State, Vsn, {StatusCode, _} = Status, Hdrs) ->
             % the request on the wire or the server has some issues and is
             % closing connections without sending responses.
             % If this the first attempt to send the request, we will try again.
-            lhttpc_sock:close(Socket, Ssl),
+            gen_server:cast(Lb, {remove, Socket}),
             NewState = State#client_state{
                 socket = undefined,
                 attempts = State#client_state.attempts - 1
             },
             send_request(NewState);
-        {error, Reason} ->
-            erlang:error(Reason)
+        {error, timeout} ->
+            gen_server:cast(Lb, {remove, Socket}),
+            NewState = State#client_state{
+                socket = undefined,
+                attempts = 0
+            },
+            send_request(NewState)
     end.
 
 handle_response_body(#client_state{partial_download = false} = State, Vsn,
@@ -408,7 +395,7 @@ read_body_part(#client_state{part_size = infinity} = State, _ContentLength) ->
     end;
 read_body_part(#client_state{part_size = PartSize} = State, ContentLength)
         when PartSize =< ContentLength ->
-    Socket = State#client_state.socket, 
+    Socket = State#client_state.socket,
     Ssl = State#client_state.ssl,
     PartSize = State#client_state.part_size,
     case lhttpc_sock:recv(Socket, PartSize, Ssl) of
@@ -419,7 +406,7 @@ read_body_part(#client_state{part_size = PartSize} = State, ContentLength)
     end;
 read_body_part(#client_state{part_size = PartSize} = State, ContentLength)
         when PartSize > ContentLength ->
-    Socket = State#client_state.socket, 
+    Socket = State#client_state.socket,
     Ssl = State#client_state.ssl,
     case lhttpc_sock:recv(Socket, ContentLength, Ssl) of
         {ok, Data} ->
@@ -630,6 +617,7 @@ maybe_close_socket(Socket, Ssl, {1, Minor}, ReqHdrs, RespHdrs) when Minor >= 1->
     ServerConnection = ?CONNECTION_HDR(RespHdrs, "keep-alive"),
     if
         ClientConnection =:= "close"; ServerConnection =:= "close" ->
+            error_logger:error_report("close"),
             lhttpc_sock:close(Socket, Ssl),
             undefined;
         ClientConnection =/= "close", ServerConnection =/= "close" ->
@@ -640,6 +628,7 @@ maybe_close_socket(Socket, Ssl, _, ReqHdrs, RespHdrs) ->
     ServerConnection = ?CONNECTION_HDR(RespHdrs, "close"),
     if
         ClientConnection =:= "close"; ServerConnection =/= "keep-alive" ->
+            error_logger:error_report("close"),
             lhttpc_sock:close(Socket, Ssl),
             undefined;
         ClientConnection =/= "close", ServerConnection =:= "keep-alive" ->
