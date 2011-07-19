@@ -325,20 +325,18 @@ request(Host, Port, Ssl, Path, Method, Hdrs, Body, Timeout, Options) ->
     Args = [self(), Host, Port, Ssl, Path, Method, Hdrs, Body, Options],
     Pid = spawn_link(lhttpc_client, request, Args),
     receive
-        X ->
-            X
-        % {response, Pid, R} ->
-        %     R;
-        % {exit, Pid, Reason} ->
-        %     % We would rather want to exit here, instead of letting the
-        %     % linked client send us an exit signal, since this can be
-        %     % caught by the caller.
-        %     exit(Reason);
-        % {'EXIT', Pid, Reason} ->
-        %     % This could happen if the process we're running in taps exits
-        %     % and the client process exits due to some exit signal being
-        %     % sent to it. Very unlikely though
-        %     exit(Reason)
+        {response, Pid, R} ->
+            R;
+        {exit, Pid, Reason} ->
+            % We would rather want to exit here, instead of letting the
+            % linked client send us an exit signal, since this can be
+            % caught by the caller.
+            exit(Reason);
+        {'EXIT', Pid, Reason} ->
+            % This could happen if the process we're running in taps exits
+            % and the client process exits due to some exit signal being
+            % sent to it. Very unlikely though
+            exit(Reason)
     after Timeout ->
             kill_client(Pid)
     end.
