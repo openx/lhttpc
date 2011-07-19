@@ -21,10 +21,10 @@
         sockets = dict:new(),
         idle_sockets = queue:new(),
         timeout = 1000000 :: non_neg_integer(),
-        max_sockets = 1 :: non_neg_integer()
+        max_sockets = 10 :: non_neg_integer()
     }).
 
-%% @spec () -> {ok, pid()}
+%% @spec (any()) -> {ok, pid()}
 %% @doc Starts and link to the gen server.
 %% This is normally called by a supervisor.
 %% @end
@@ -49,7 +49,6 @@ init({Host, Port, Ssl}) ->
 -spec handle_call(any(), any(), #httpc_man{}) ->
     {reply, any(), #httpc_man{}}.
 handle_call({socket, Pid, ConnectOptions}, _, State) ->
-    error_logger:error_report(find),
     {Reply, NewState} = find_socket(Pid, ConnectOptions, State),
     {reply, Reply, NewState};
 handle_call(_, _, State) ->
@@ -57,13 +56,11 @@ handle_call(_, _, State) ->
 
 %% @hidden
 -spec handle_cast(any(), #httpc_man{}) -> {noreply, #httpc_man{}}.
-handle_cast({remove, Socket}, State) ->
-    error_logger:error_report(remove),
-    NewState = remove_socket(Socket, State),
-    {noreply, NewState};
 handle_cast({store, Socket}, State) ->
-    error_logger:error_report(store),
     NewState = store_socket(Socket, State),
+    {noreply, NewState};
+handle_cast({remove, Socket}, State) ->
+    NewState = remove_socket(Socket, State),
     {noreply, NewState};
 handle_cast({terminate}, State) ->
     terminate(undefined, State),
@@ -76,28 +73,20 @@ handle_cast(_, State) ->
 %% @hidden
 -spec handle_info(any(), #httpc_man{}) -> {noreply, #httpc_man{}}.
 handle_info({tcp_closed, Socket}, State) ->
-    error_logger:error_report(tcp_closed),
     {noreply, remove_socket(Socket, State)};
 handle_info({ssl_closed, Socket}, State) ->
-    error_logger:error_report(ssl_closed),
     {noreply, remove_socket(Socket, State)};
 handle_info({timeout, Socket}, State) ->
-    error_logger:error_report(timeout),
     {noreply, remove_socket(Socket, State)};
 handle_info({tcp_error, Socket, _}, State) ->
-    error_logger:error_report(tcp_error),
     {noreply, remove_socket(Socket, State)};
 handle_info({ssl_error, Socket, _}, State) ->
-    error_logger:error_report(ssl_error),
     {noreply, remove_socket(Socket, State)};
 handle_info({tcp, Socket, _}, State) ->
-    error_logger:error_report(tcp),
     {noreply, remove_socket(Socket, State)}; % got garbage
 handle_info({ssl, Socket, _}, State) ->
-    error_logger:error_report(ssl),
     {noreply, remove_socket(Socket, State)}; % got garbage
 handle_info(_, State) ->
-    error_logger:error_report(other),
     {noreply, State}.
 
 %% @hidden
