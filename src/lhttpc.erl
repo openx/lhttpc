@@ -322,23 +322,32 @@ request(URL, Method, Hdrs, Body, Timeout, Options) ->
     headers(), iolist(), pos_integer(), [option()]) -> result().
 request(Host, Port, Ssl, Path, Method, Hdrs, Body, Timeout, Options) ->
     verify_options(Options, []),
-    Args = [self(), Host, Port, Ssl, Path, Method, Hdrs, Body, Options],
-    Pid = spawn_link(lhttpc_client, request, Args),
-    receive
-        {response, Pid, R} ->
-            R;
-        {exit, Pid, Reason} ->
-            % We would rather want to exit here, instead of letting the
-            % linked client send us an exit signal, since this can be
-            % caught by the caller.
-            exit(Reason);
-        {'EXIT', Pid, Reason} ->
-            % This could happen if the process we're running in taps exits
-            % and the client process exits due to some exit signal being
-            % sent to it. Very unlikely though
-            exit(Reason)
-    after Timeout ->
-            kill_client(Pid)
+    ReqId = erlang:now(),
+    case proplists:is_defined(stream_to, Options) of
+        true ->
+            StreamTo = proplists:get_value(stream_to, Options),
+            Args = [ReqId, StreamTo, Host, Port, Ssl, Path, Method, Hdrs, Body, Options],
+            Pid = spawn_link(lhttpc_client, request, Args),
+            {ReqId, Pid};
+        false ->
+            Args = [ReqId, self(), Host, Port, Ssl, Path, Method, Hdrs, Body, Options],
+            Pid = spawn_link(lhttpc_client, request, Args),
+            receive
+                {response, ReqId, Pid, R} ->
+                    R;
+                {exit, ReqId, Pid, Reason} ->
+                    % We would rather want to exit here, instead of letting the
+                    % linked client send us an exit signal, since this can be
+                    % caught by the caller.
+                    exit(Reason);
+                {'EXIT', ReqId, Pid, Reason} ->
+                    % This could happen if the process we're running in taps exits
+                    % and the client process exits due to some exit signal being
+                    % sent to it. Very unlikely though
+                    exit(Reason)
+            after Timeout ->
+                    kill_client(Pid)
+            end
     end.
 
 %% @spec (UploadState :: UploadState, BodyPart :: BodyPart) -> Result
@@ -388,7 +397,7 @@ send_body_part({Pid, 0}, IoList, Timeout) when is_pid(Pid) ->
     receive
         {ack, Pid} ->
             send_body_part({Pid, 1}, IoList, Timeout);
-        {response, Pid, R} ->
+        {response, _ReqId, Pid, R} ->
             R;
         {exit, Pid, Reason} ->
             exit(Reason);
@@ -403,7 +412,7 @@ send_body_part({Pid, Window}, IoList, _Timeout) when Window > 0, is_pid(Pid) ->
     receive
         {ack, Pid} ->
             {ok, {Pid, Window}};
-        {reponse, Pid, R} ->
+        {response, _ReqId, Pid, R} ->
             R;
         {exit, Pid, Reason} ->
             exit(Reason);
@@ -506,7 +515,7 @@ read_response(Pid, Timeout) ->
     receive
         {ack, Pid} ->
             read_response(Pid, Timeout);
-        {response, Pid, R} ->
+        {response, _ReqId, Pid, R} ->
             R;
         {exit, Pid, Reason} ->
             exit(Reason);
@@ -521,7 +530,7 @@ kill_client(Pid) ->
     unlink(Pid), % or we'll kill ourself :O
     exit(Pid, timeout),
     receive
-        {response, Pid, R} ->
+        {response, _ReqId, Pid, R} ->
             erlang:demonitor(Monitor, [flush]),
             R;
         {'DOWN', _, process, Pid, timeout} ->
@@ -546,6 +555,9 @@ verify_options([{connection_timeout, MS} | Options], Errors)
     verify_options(Options, Errors);
 verify_options([{max_connections, MS} | Options], Errors)
         when is_integer(MS), MS >= 0 ->
+    verify_options(Options, Errors);
+verify_options([{stream_to, Pid} | Options], Errors)
+        when is_pid(Pid) ->
     verify_options(Options, Errors);
 verify_options([{partial_upload, WindowSize} | Options], Errors)
         when is_integer(WindowSize), WindowSize >= 0 ->

@@ -34,11 +34,12 @@
 %%% @type iolist() = [] | binary() | [char() | binary() | iolist()].
 -module(lhttpc_client).
 
--export([request/9]).
+-export([request/10]).
 
 -include("lhttpc_types.hrl").
 
 -record(client_state, {
+        req_id :: tuple(),
         host :: string(),
         port = 80 :: integer(),
         ssl = false :: true | false,
@@ -64,9 +65,10 @@
 -define(CONNECTION_HDR(HDRS, DEFAULT),
     string:to_lower(lhttpc_lib:header_value("connection", HDRS, DEFAULT))).
 
--spec request(pid(), string(), 1..65535, true | false, string(),
+-spec request(tuple(), pid(), string(), 1..65535, true | false, string(),
         string() | atom(), headers(), iolist(), [option()]) -> no_return().
-%% @spec (From, Host, Port, Ssl, Path, Method, Hdrs, RequestBody, Options) -> ok
+%% @spec (ReqId, From, Host, Port, Ssl, Path, Method, Hdrs, RequestBody, Options) -> ok
+%%    ReqId = tuple()
 %%    From = pid()
 %%    Host = string()
 %%    Port = integer()
@@ -78,16 +80,16 @@
 %%    Options = [Option]
 %%    Option = {connect_timeout, Milliseconds}
 %% @end
-request(From, Host, Port, Ssl, Path, Method, Hdrs, Body, Options) ->
+request(ReqId, From, Host, Port, Ssl, Path, Method, Hdrs, Body, Options) ->
     Result = try
-        execute(From, Host, Port, Ssl, Path, Method, Hdrs, Body, Options)
+        execute(ReqId, From, Host, Port, Ssl, Path, Method, Hdrs, Body, Options)
     catch
         Reason ->
-            {response, self(), {error, Reason}};
+            {response, ReqId, self(), {error, Reason}};
         error:closed ->
-            {response, self(), {error, connection_closed}};
+            {response, ReqId, self(), {error, connection_closed}};
         error:Error ->
-            {exit, self(), {Error, erlang:get_stacktrace()}}
+            {exit, ReqId, self(), {Error, erlang:get_stacktrace()}}
     end,
     case Result of
         {response, _, {ok, {no_return, _}}} -> ok;
@@ -98,7 +100,7 @@ request(From, Host, Port, Ssl, Path, Method, Hdrs, Body, Options) ->
     unlink(From),
     ok.
 
-execute(From, Host, Port, Ssl, Path, Method, Hdrs, Body, Options) ->
+execute(ReqId, From, Host, Port, Ssl, Path, Method, Hdrs, Body, Options) ->
     UploadWindowSize = proplists:get_value(partial_upload, Options),
     PartialUpload = proplists:is_defined(partial_upload, Options),
     PartialDownload = proplists:is_defined(partial_download, Options),
@@ -112,6 +114,7 @@ execute(From, Host, Port, Ssl, Path, Method, Hdrs, Body, Options) ->
     LbRequest = {lb, Host, Port, Ssl, MaxConnections, ConnectionTimeout},
     {ok, Lb} = gen_server:call(lhttpc_manager, LbRequest, infinity),
     State = #client_state{
+        req_id = ReqId,
         host = Host,
         port = Port,
         ssl = Ssl,
@@ -145,7 +148,7 @@ execute(From, Host, Port, Ssl, Path, Method, Hdrs, Body, Options) ->
             end,
             {ok, R}
     end,
-    {response, self(), Response}.
+    {response, ReqId, self(), Response}.
 
 send_request(#client_state{attempts = 0}) ->
     throw(connection_closed);
@@ -185,7 +188,7 @@ send_request(State) ->
 
 partial_upload(State) ->
     Response = {ok, {self(), State#client_state.upload_window}},
-    State#client_state.requester ! {response, self(), Response},
+    State#client_state.requester ! {response, State#client_state.req_id, self(), Response},
     partial_upload_loop(State#client_state{attempts = 1, request = undefined}).
 
 partial_upload_loop(State = #client_state{requester = Pid}) ->
@@ -297,7 +300,7 @@ handle_response_body(#client_state{partial_download = true} = State, Vsn,
     case has_body(Method, element(1, Status), Hdrs) of
         true ->
             Response = {ok, {Status, Hdrs, self()}},
-            State#client_state.requester ! {response, self(), Response},
+            State#client_state.requester ! {response, State#client_state.req_id, self(), Response},
             MonRef = erlang:monitor(process, State#client_state.requester),
             Res = read_partial_body(State, Vsn, Hdrs, body_type(Hdrs)),
             erlang:demonitor(MonRef, [flush]),
