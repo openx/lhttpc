@@ -30,7 +30,6 @@
 %%% This module implements wrappers for socket operations.
 %%% Makes it possible to have the same interface to ssl and tcp sockets.
 %%% @end
-%%% @type boolean() = bool().
 -module(lhttpc_sock).
 
 -export([

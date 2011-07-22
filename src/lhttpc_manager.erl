@@ -32,7 +32,6 @@
 %%% The gen_server is supposed to be started by a supervisor, which is
 %%% normally {@link lhttpc_sup}.
 %%% @end
-%%% @type boolean() = bool().
 -module(lhttpc_manager).
 
 -export([
