@@ -92,7 +92,7 @@ request(ReqId, From, Host, Port, Ssl, Path, Method, Hdrs, Body, Options) ->
             {exit, ReqId, self(), {Error, erlang:get_stacktrace()}}
     end,
     case Result of
-        {response, _, {ok, {no_return, _}}} -> ok;
+        {response, _, _, {ok, {no_return, _}}} -> ok;
         _Else                               -> From ! Result
     end,
     % Don't send back {'EXIT', self(), normal} if the process
