@@ -326,7 +326,6 @@ request(Host, Port, Ssl, Path, Method, Hdrs, Body, Timeout, Options) ->
             StreamTo = proplists:get_value(stream_to, Options),
             Args = [ReqId, StreamTo, Host, Port, Ssl, Path, Method, Hdrs, Body, Options],
             Pid = spawn(lhttpc_client, request_with_timeout, [Timeout, Args]),
-            _TimerRef = erlang:send_after(Timeout, lhttpc_manager, {kill_client_after_timeout, ReqId, Pid, StreamTo}),
             {ReqId, Pid};
         false ->
             Args = [ReqId, self(), Host, Port, Ssl, Path, Method, Hdrs, Body, Options],
