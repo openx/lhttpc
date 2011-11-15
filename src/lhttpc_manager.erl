@@ -82,6 +82,14 @@ handle_cast(_, State) ->
 
 %% @hidden
 -spec handle_info(any(), #httpc_man{}) -> {noreply, #httpc_man{}}.
+handle_info({kill_client_after_timeout, ReqId, Pid, StreamTo}, State) ->
+    case erlang:is_process_alive(Pid) of
+        true ->
+            exit(Pid, kill),
+            StreamTo ! {response, ReqId, Pid, {error, timeout}};
+        false -> ok
+    end,
+    {noreply, State};
 handle_info(_, State) ->
     {noreply, State}.
 

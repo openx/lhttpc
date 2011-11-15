@@ -32,7 +32,7 @@
 %%% @end
 -module(lhttpc_client).
 
--export([request/10]).
+-export([request/10, request_with_timeout/2]).
 
 -include("lhttpc_types.hrl").
 
@@ -62,6 +62,11 @@
 
 -define(CONNECTION_HDR(HDRS, DEFAULT),
     string:to_lower(lhttpc_lib:header_value("connection", HDRS, DEFAULT))).
+
+request_with_timeout(Timeout, [ReqId, StreamTo, _Host, _Port, _Ssl, _Path, _Method, _Hdrs, _Body, _Options] = Args) ->
+    TimerRef = erlang:send_after(Timeout, lhttpc_manager, {kill_client_after_timeout, ReqId, self(), StreamTo}),
+    ok = apply(?MODULE, request, Args),
+    erlang:cancel_timer(TimerRef).
 
 -spec request(tuple(), pid(), string(), 1..65535, true | false, string(),
         string() | atom(), headers(), iolist(), [option()]) -> no_return().

@@ -325,7 +325,8 @@ request(Host, Port, Ssl, Path, Method, Hdrs, Body, Timeout, Options) ->
         true ->
             StreamTo = proplists:get_value(stream_to, Options),
             Args = [ReqId, StreamTo, Host, Port, Ssl, Path, Method, Hdrs, Body, Options],
-            Pid = spawn_link(lhttpc_client, request, Args),
+            Pid = spawn(lhttpc_client, request_with_timeout, [Timeout, Args]),
+            _TimerRef = erlang:send_after(Timeout, lhttpc_manager, {kill_client_after_timeout, ReqId, Pid, StreamTo}),
             {ReqId, Pid};
         false ->
             Args = [ReqId, self(), Host, Port, Ssl, Path, Method, Hdrs, Body, Options],
@@ -556,8 +557,6 @@ verify_options([{max_connections, MS} | Options], Errors)
     verify_options(Options, Errors);
 verify_options([{stream_to, Pid} | Options], Errors)
         when is_pid(Pid) ->
-    verify_options(Options, Errors);
-verify_options([{stream_to, undefined} | Options], Errors) ->
     verify_options(Options, Errors);
 verify_options([{partial_upload, WindowSize} | Options], Errors)
         when is_integer(WindowSize), WindowSize >= 0 ->
