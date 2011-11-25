@@ -29,7 +29,6 @@
 %%% @doc
 %%% This module implements wrappers for socket operations.
 %%% Makes it possible to have the same interface to ssl and tcp sockets.
-%%% @end
 -module(lhttpc_sock).
 
 -export([
@@ -80,7 +79,7 @@ connect(Host, Port, Options, Timeout, false) ->
 recv(Socket, true) ->
     ssl:recv(Socket, 0);
 recv(Socket, false) ->
-    inet_tcp:recv(Socket, 0).
+    gen_tcp:recv(Socket, 0).
 
 %% @spec (Socket, Length, SslFlag) -> {ok, Data} | {error, Reason}
 %%   Socket = socket()
