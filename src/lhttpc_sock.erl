@@ -154,6 +154,28 @@ setopts(Socket, Options, false) ->
 %% @end
 -spec close(socket(), boolean()) -> ok | {error, atom()}.
 close(Socket, true) ->
-    ssl:close(Socket);
+    %% Safer exiting. Yoshihiro Tanaka from OpenX figured out
+    %% that we had potential race conditions while closing the
+    %% socket and timing out. This process flagging aims to
+    %% wrap some safety around this in case of a timeout
+    Flag = process_flag(trap_exit, true),
+    Res = ssl:close(Socket),
+    receive
+        {'EXIT',_Pid,timeout} -> exit(timeout)
+    after 0 ->
+            process_flag(trap_exit, Flag),
+            Res
+    end;
 close(Socket, false) ->
-    gen_tcp:close(Socket).
+    %% Safer exiting. Yoshihiro Tanaka from OpenX figured out
+    %% that we had potential race conditions while closing the
+    %% socket and timing out. This process flagging aims to
+    %% wrap some safety around this in case of a timeout
+    Flag = process_flag(trap_exit, true),
+    Res = gen_tcp:close(Socket),
+    receive
+        {'EXIT',_Pid,timeout} -> exit(timeout)
+    after 0 ->
+            process_flag(trap_exit, Flag),
+            Res
+    end.
