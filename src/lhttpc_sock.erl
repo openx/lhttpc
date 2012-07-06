@@ -38,7 +38,8 @@
         send/3,
         controlling_process/3,
         setopts/3,
-        close/2
+        close/2,
+        check_timeout/0
     ]).
 
 -include("lhttpc_types.hrl").
@@ -76,10 +77,12 @@ connect(Host, Port, Options, Timeout, false) ->
 %% @end
 -spec recv(socket(), boolean()) ->
     {ok, any()} | {error, atom()} | {error, {http_error, string()}}.
-recv(Socket, true) ->
-    ssl:recv(Socket, 0);
-recv(Socket, false) ->
-    gen_tcp:recv(Socket, 0).
+recv(Socket, Ssl) ->
+    check_timeout(),
+    case Ssl of
+      true -> ssl:recv(Socket, 0);
+      false -> gen_tcp:recv(Socket, 0)
+    end.
 
 %% @spec (Socket, Length, SslFlag) -> {ok, Data} | {error, Reason}
 %%   Socket = socket()
@@ -94,10 +97,12 @@ recv(Socket, false) ->
 -spec recv(socket(), integer(), boolean()) -> {ok, any()} | {error, atom()}.
 recv(_, 0, _) ->
     {ok, <<>>};
-recv(Socket, Length, true) ->
-    ssl:recv(Socket, Length);
-recv(Socket, Length, false) ->
-    gen_tcp:recv(Socket, Length).
+recv(Socket, Length, Ssl) ->
+    check_timeout(),
+    case Ssl of
+      true -> ssl:recv(Socket, Length);
+      false -> gen_tcp:recv(Socket, Length)
+    end.
 
 %% @spec (Socket, Data, SslFlag) -> ok | {error, Reason}
 %%   Socket = socket()
@@ -157,3 +162,9 @@ close(Socket, true) ->
     ssl:close(Socket);
 close(Socket, false) ->
     gen_tcp:close(Socket).
+
+check_timeout() ->
+    receive
+      {error, timeout} -> throw(timeout)
+    after 0 -> ok
+    end. 

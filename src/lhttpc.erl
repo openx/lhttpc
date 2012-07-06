@@ -530,34 +530,14 @@ read_response(Pid, Timeout) ->
     end.
 
 kill_client(Pid) ->
-    Monitor = erlang:monitor(process, Pid),
-    unlink(Pid), % or we'll kill ourself :O
-    exit(Pid, timeout),
-    receive
-        {response, _ReqId, Pid, R} ->
-            erlang:demonitor(Monitor, [flush]),
-            R;
-        {'DOWN', _, process, Pid, timeout} ->
-            {error, timeout};
-        {'DOWN', _, process, Pid, Reason}  ->
-            erlang:error(Reason)
-    end.
+    Pid ! {error, timeout}.
 
 kill_client_after(Pid, Timeout) ->
     erlang:monitor(process, Pid),
     receive
         {'DOWN', _, process, Pid, _Reason} -> exit(normal)
     after Timeout ->
-        catch unlink(Pid), % or we'll kill ourself :O
-        exit(Pid, timeout),
-        receive
-            {'DOWN', _, process, Pid, timeout} ->
-                {error, timeout};
-            {'DOWN', _, process, Pid, Reason}  ->
-                erlang:error(Reason)
-        after 1000 ->
-            exit(normal) % silent failure!
-        end
+        Pid ! {error, timeout}
     end.
 
 -spec verify_options(options(), options()) -> ok.

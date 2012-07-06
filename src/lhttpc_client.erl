@@ -102,6 +102,7 @@ execute(ReqId, From, Host, Port, Ssl, Path, Method, Hdrs, Body, Options) ->
     PartialDownloadOptions = proplists:get_value(partial_download, Options, []),
     NormalizedMethod = lhttpc_lib:normalize_method(Method),
     MaxConnections = proplists:get_value(max_connections, Options, 10),
+    Timeout =proplists:get_value(connect_timeout, Options, infinity),
     ConnectionTimeout = proplists:get_value(connection_timeout, Options, infinity),
     {ChunkedUpload, Request} = lhttpc_lib:format_request(Path, NormalizedMethod,
         Hdrs, Host, Port, Body, PartialUpload),
@@ -120,8 +121,7 @@ execute(ReqId, From, Host, Port, Ssl, Path, Method, Hdrs, Body, Options) ->
         requester = From,
         request_headers = Hdrs,
         socket = Socket,
-        connect_timeout = proplists:get_value(connect_timeout, Options,
-            infinity),
+        connect_timeout = Timeout,
         connect_options = proplists:get_value(connect_options, Options, []),
         attempts = 1 + proplists:get_value(send_retry, Options, 1),
         partial_upload = PartialUpload,
@@ -133,6 +133,7 @@ execute(ReqId, From, Host, Port, Ssl, Path, Method, Hdrs, Body, Options) ->
         part_size = proplists:get_value(part_size,
             PartialDownloadOptions, infinity)
     },
+    lhttpc_sock:check_timeout(),
     Response = case send_request(State) of
         {R, undefined} ->
             {ok, R};
@@ -153,7 +154,7 @@ send_request(#client_state{socket = undefined} = State) ->
     Ssl = State#client_state.ssl,
     Timeout = State#client_state.connect_timeout,
     ConnectOptions = State#client_state.connect_options,
-    SocketOptions = [binary, {packet, http}, {active, false} | ConnectOptions],
+    SocketOptions = [binary, {packet, http}, {active, false}, {send_timeout, Timeout} | ConnectOptions],
     case lhttpc_sock:connect(Host, Port, SocketOptions, Timeout, Ssl) of
         {ok, Socket} ->
             send_request(State#client_state{socket = Socket});
@@ -193,6 +194,7 @@ partial_upload(State) ->
     partial_upload_loop(State#client_state{attempts = 1, request = undefined}).
 
 partial_upload_loop(State = #client_state{requester = Pid}) ->
+    lhttpc_sock:check_timeout(),
     receive
         {trailers, Pid, Trailers} ->
             send_trailers(State, Trailers),
@@ -638,3 +640,4 @@ maybe_close_socket(Socket, Ssl, _, ReqHdrs, RespHdrs) ->
         ClientConnection =/= "close", ServerConnection =:= "keep-alive" ->
             Socket
     end.
+
