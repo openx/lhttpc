@@ -156,7 +156,7 @@ code_change(_OldVsn, State, _Extra) ->
 terminate(_Reason, #state{host=H, port=P, ssl=Ssl, free=Free, clients=Tid}) ->
     ets:delete(Tid),
     ets:delete(?MODULE,{H,P,Ssl}),
-    [lhttpc_sock:close(Socket,Ssl) || Socket <- Free],
+    [lhttpc_sock:close(Socket,Ssl) || {Socket, _TimerRef} <- Free],
     ok.
 
 %%%%%%%%%%%%%%%
