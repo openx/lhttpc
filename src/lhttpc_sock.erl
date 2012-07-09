@@ -59,9 +59,25 @@
 -spec connect(host(), integer(), socket_options(), timeout(), boolean()) ->
     {ok, socket()} | {error, atom()}.
 connect(Host, Port, Options, Timeout, true) ->
-    ssl:connect(Host, Port, Options, Timeout);
+    % Avoid port leak with potential race condition in case of timeout
+    Flag = process_flag(trap_exit, true),
+    Res = ssl:connect(Host, Port, Options, Timeout),
+    receive
+          {'EXIT',_Pid,timeout} -> exit(timeout)
+        after 0 ->
+                process_flag(trap_exit, Flag),
+                Res
+        end;
 connect(Host, Port, Options, Timeout, false) ->
-    gen_tcp:connect(Host, Port, Options, Timeout).
+    % Avoid port leak with potential race condition in case of timeout
+    Flag = process_flag(trap_exit, true),
+    Res = gen_tcp:connect(Host, Port, Options, Timeout),
+    receive
+          {'EXIT',_Pid,timeout} -> exit(timeout)
+        after 0 ->
+                process_flag(trap_exit, Flag),
+                Res
+        end.
 
 %% @spec (Socket, SslFlag) -> {ok, Data} | {error, Reason}
 %%   Socket = socket()
@@ -154,10 +170,7 @@ setopts(Socket, Options, false) ->
 %% @end
 -spec close(socket(), boolean()) -> ok | {error, atom()}.
 close(Socket, true) ->
-    %% Safer exiting. Yoshihiro Tanaka from OpenX figured out
-    %% that we had potential race conditions while closing the
-    %% socket and timing out. This process flagging aims to
-    %% wrap some safety around this in case of a timeout
+    % Avoid port leak with potential race condition in case of timeout
     Flag = process_flag(trap_exit, true),
     Res = ssl:close(Socket),
     receive
@@ -167,10 +180,7 @@ close(Socket, true) ->
             Res
     end;
 close(Socket, false) ->
-    %% Safer exiting. Yoshihiro Tanaka from OpenX figured out
-    %% that we had potential race conditions while closing the
-    %% socket and timing out. This process flagging aims to
-    %% wrap some safety around this in case of a timeout
+    % Avoid port leak with potential race condition in case of timeout
     Flag = process_flag(trap_exit, true),
     Res = gen_tcp:close(Socket),
     receive
