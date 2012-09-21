@@ -350,7 +350,7 @@ request(Host, Port, Ssl, Path, Method, Hdrs, Body, Timeout, Options) ->
                     % sent to it. Very unlikely though
                     exit(Reason)
             after Timeout ->
-                    kill_client(Pid)
+                kill_client(Pid)
             end
     end.
 
@@ -530,18 +530,9 @@ read_response(Pid, Timeout) ->
     end.
 
 kill_client(Pid) ->
-    Monitor = erlang:monitor(process, Pid),
     unlink(Pid), % or we'll kill ourself :O
     exit(Pid, timeout),
-    receive
-        {response, _ReqId, Pid, R} ->
-            erlang:demonitor(Monitor, [flush]),
-            R;
-        {'DOWN', _, process, Pid, timeout} ->
-            {error, timeout};
-        {'DOWN', _, process, Pid, Reason}  ->
-            erlang:error(Reason)
-    end.
+    {error, timeout}.
 
 kill_client_after(Pid, Timeout) ->
     erlang:monitor(process, Pid),
@@ -550,14 +541,7 @@ kill_client_after(Pid, Timeout) ->
     after Timeout ->
         catch unlink(Pid), % or we'll kill ourself :O
         exit(Pid, timeout),
-        receive
-            {'DOWN', _, process, Pid, timeout} ->
-                {error, timeout};
-            {'DOWN', _, process, Pid, Reason}  ->
-                erlang:error(Reason)
-        after 1000 ->
-            exit(normal) % silent failure!
-        end
+        {error, timeout}
     end.
 
 -spec verify_options(options(), options()) -> ok.
