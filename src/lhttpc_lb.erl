@@ -4,7 +4,7 @@
 %%% connection attempts from clients.
 -module(lhttpc_lb).
 -behaviour(gen_server).
--export([start_link/5, checkout/5, checkin/3, checkin/4]).
+-export([start_link/5, checkout/5, checkin/3, checkin/4, get_conn_status/0]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          code_change/3, terminate/2]).
 
@@ -65,6 +65,15 @@ checkin(Host, Port, Ssl, Socket) ->
             end
     end.
 
+%% For debugging purpose: gather the status of connections for all endpoints
+-spec get_conn_status() -> list().
+get_conn_status() ->
+    case ets:match(?MODULE, '$0') of
+        [] -> [];
+        Endpoints ->
+            get_endpoints_conn_status(Endpoints)
+    end.
+
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%% GEN_SERVER CALLBACKS %%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -108,6 +117,10 @@ handle_call({checkout,Pid}, _From, S = #state{free=[{Taken,Timer}|Free], clients
             cancel_timer(Timer, Taken),
             handle_call({checkout,Pid}, _From, S#state{free=Free})
     end;
+handle_call(get_conn_status, _From, S = #state{free=Free, clients=Tid}) ->
+    %% Read all records
+    Pids = ets:match(Tid, '$0'),
+    {reply, {ok, {in_use_cnt, length(Pids)}, {freeConns, Free}}, S};
 handle_call(_Msg, _From, S) ->
     {noreply, S}.
 
@@ -248,3 +261,18 @@ noreply_maybe_shutdown(S=#state{clients=Tid, free=Free}) ->
         false ->
             {noreply, S}
     end.
+
+-spec get_endpoints_conn_status(list({any(), pid()})) -> list().
+get_endpoints_conn_status([]) -> [];
+get_endpoints_conn_status([[{Endpoint, Pid}]|Endpoints]) ->
+    case is_process_alive(Pid) of
+        true ->
+            {ok, InUseCnt, FreeCons} =
+                 gen_server:call(Pid, get_conn_status),
+            io:format("~p:~p~n", [Endpoint, FreeCons]),
+            [{Endpoint, InUseCnt, FreeCons} |
+                get_endpoints_conn_status(Endpoints)];
+        false ->
+            get_endpoints_conn_status(Endpoints)
+    end.
+
