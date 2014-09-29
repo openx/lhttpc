@@ -250,7 +250,7 @@ request(URL, Method, Hdrs, Body, Timeout, Options) ->
 %% `{connect_timeout, Milliseconds}' specifies how many milliseconds the
 %% client can spend trying to establish a connection to the server. This
 %% doesn't affect the overall request timeout. However, if it's longer than
-%% the overall timeout it will be ignored. Also note that the TCP layer my
+%% the overall timeout it will be ignored. Also note that the TCP layer may
 %% choose to give up earlier than the connect timeout, in which case the
 %% client will also give up. The default value is infinity, which means that
 %% it will either give up when the TCP stack gives up, or when the overall
@@ -317,6 +317,23 @@ request(URL, Method, Hdrs, Body, Timeout, Options) ->
 %% `undefined'. The functions {@link get_body_part/1} and
 %% {@link get_body_part/2} can be used to read body parts in the calling
 %% process.
+%%
+%% `{max_connections, N}' is a connection pool parameter that
+%% specifies the maximum size of the connection pool.  When a call to
+%% `request' is made, an attempt is first made to find an idle socket
+%% that is already connected to the specified `Host', `Port', and
+%% `Ssl'.  If one is found it will be used.  Otherwise if the number
+%% of already-open connections is less than `N'-1, a new socket will
+%% be opened and used.  Finally, if there are already more `N' or more
+%% active connections to the remote host, `request' will throw a
+%% `retry_later' exception.  The default value is 10.
+
+%% `{connection_timeout, Milliseconds}' is a connection pool parameter
+%% that controls how long an idle socket will be kept open before it
+%% is closed.  The default value is `infinity', which means that
+%% lhttpc will never close the connection itself; it will only be
+%% closed by the other end or the TCP keepalive mechanism.
+%%
 %% @end
 -spec request(string(), 1..65535, true | false, string(), atom() | string(),
     headers(), iolist(), pos_integer(), [option()]) -> result().
