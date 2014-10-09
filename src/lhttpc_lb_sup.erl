@@ -1,7 +1,7 @@
 %%% ----------------------------------------------------------------------------
 %%% Copyright (c) 2009, Erlang Training and Consulting Ltd.
 %%% All rights reserved.
-%%% 
+%%%
 %%% Redistribution and use in source and binary forms, with or without
 %%% modification, are permitted provided that the following conditions are met:
 %%%    * Redistributions of source code must retain the above copyright
@@ -12,7 +12,7 @@
 %%%    * Neither the name of Erlang Training and Consulting Ltd. nor the
 %%%      names of its contributors may be used to endorse or promote products
 %%%      derived from this software without specific prior written permission.
-%%% 
+%%%
 %%% THIS SOFTWARE IS PROVIDED BY Erlang Training and Consulting Ltd. ''AS IS''
 %%% AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
 %%% IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
@@ -29,7 +29,7 @@
 %%% This is normally started by the application behaviour implemented in
 %%% {@link lhttpc}.
 %%% @end
--module(lhttpc_sup).
+-module(lhttpc_lb_sup).
 -behaviour(supervisor).
 
 -export([start_link/0, start_link/1]).
@@ -43,7 +43,7 @@
 %% @end
 -spec start_link() -> {ok, pid()} | {error, atom()}.
 start_link() ->
-    supervisor:start_link({local, ?MODULE}, ?MODULE, [{stats, true}]).
+    supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 
 %% @doc Starts and links to the supervisor.
 %% This is normally called from an application behaviour or from another
@@ -55,29 +55,21 @@ start_link() ->
 %% ets table.  Currently `read_concurrency' is the only supported ets
 %% option.
 %%
-%% `{stats, Boolean}' controls whether some lhttpc keeps some
-%% connection statistics.
-%%
 %% @end
 start_link(Args) ->
     supervisor:start_link({local, ?MODULE}, ?MODULE, Args).
 
 %% @hidden
 init(Opts) ->
-    case application:get_env(dns_cache) of
-        {ok, true} -> lhttpc_dns:init(ok);
-        _          -> ok
-    end,
-    StatsEnabled =
-        case application:get_env(stats) of
-            {ok, true} -> true;
-            _          -> false
-        end,
-    {ok, {{one_for_one, 10, 1}, [
-        {lhttpc_stats,
-         {lhttpc_stats, start_link, [ StatsEnabled ]},
-         permanent, 5000, worker, [lhttpc_stats]},
-        {lhttpc_lb_sup,
-         {lhttpc_lb_sup, start_link, Opts},
-         permanent, 5000, supervisor, [lhttpc_lb_sup]}
+    init_ets(Opts),
+    {ok, {{simple_one_for_one, 10, 1}, [
+        {load_balancer,
+         {lhttpc_lb, start_link, []},
+         transient, 10000, worker, [lhttpc_lb]}
     ]}}.
+
+init_ets(Opts) ->
+    ETSOpts = proplists:get_value(ets, Opts, []),
+    %% Only option supported so far -- others do not really make sense at this point
+    ReadConc = {read_concurrency, proplists:get_value(read_concurrency, ETSOpts, false)},
+    ets:new(lhttpc_lb, [named_table, set, public, ReadConc]).

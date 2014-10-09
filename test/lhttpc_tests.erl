@@ -105,6 +105,8 @@ start_app() ->
     ok = lhttpc:start().
 
 stop_app(_) ->
+    timer:sleep(1000),
+    lhttpc_stats:print(),
     ok = lhttpc:stop(),
     ok = application:stop(ssl).
 

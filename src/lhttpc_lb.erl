@@ -4,7 +4,7 @@
 %%% connection attempts from clients.
 -module(lhttpc_lb).
 -behaviour(gen_server).
--export([start_link/5, checkout/5, checkin/4, connection_count/3]).
+-export([start_link/5, checkout/5, checkin/4, connection_count/3, connection_count/1]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          code_change/3, terminate/2]).
 
@@ -20,7 +20,7 @@
                 clients :: ets:tid(),
                 free=[] :: list()}).
 
--export_types([host/0, port_number/0, max_connections/0, connection_timeout/0]).
+-export_types([host/0, port_number/0, socket/0, max_connections/0, connection_timeout/0]).
 -type host() :: inet:ip_address()|string().
 -type port_number() :: 1..65535.
 -type socket() :: gen_tcp:socket() | ssl:sslsocket().
@@ -64,7 +64,10 @@ checkin(Host, Port, Ssl, Socket) ->
 -spec connection_count(host(), port_number(), Ssl::boolean()) ->
                        {ActiveConnections::integer(), IdleConnections::integer()}.
 connection_count(Host, Port, Ssl) ->
-    case find_lb({Host,Port,Ssl}) of
+    connection_count({Host, Port, Ssl}).
+
+connection_count(Name) ->
+    case find_lb(Name) of
         {error, undefined} -> {0, 0};
         {ok, Pid} -> gen_server:call(Pid, {connection_count})
     end.
@@ -91,8 +94,8 @@ handle_call({checkout,Pid}, _From, S = #state{free=[], max_conn=Max, clients=Tid
     Size = ets:info(Tid, size),
     case Max > Size of
         true ->
-            Ref = erlang:monitor(process, Pid),
-            ets:insert(Tid, {Pid, Ref}),
+            %% We don't have an open socket, but the client can open one.
+            add_client(Tid, Pid),
             {reply, no_socket, S};
         false ->
             {reply, retry_later, S}
@@ -119,6 +122,7 @@ handle_call(_Msg, _From, S) ->
     {noreply, S}.
 
 handle_cast({checkin, Pid, Socket}, S = #state{ssl=Ssl, clients=Tid, free=Free, timeout=T}) ->
+    lhttpc_stats:record(end_request, Socket),
     remove_client(Tid, Pid),
     %% the client cast function took care of giving us ownership
     case lhttpc_sock:setopts(Socket, [{active, once}], Ssl) of
@@ -131,8 +135,13 @@ handle_cast({checkin, Pid, Socket}, S = #state{ssl=Ssl, clients=Tid, free=Free, 
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
-handle_info({'DOWN', _Ref, process, Pid, _Reason}, S=#state{clients=Tid}) ->
+handle_info({'DOWN', _Ref, process, Pid, Reason}, S=#state{clients=Tid}) ->
     %% Client died
+    case Reason of
+        normal      -> ok;
+        timeout     -> lhttpc_stats:record(close_connection_timeout, Pid);
+        OtherReason -> io:format(standard_error, "DOWN ~p\n", [ OtherReason ])
+    end,
     remove_client(Tid,Pid),
     noreply_maybe_shutdown(S);
 handle_info({tcp_closed, Socket}, State) ->
@@ -160,7 +169,10 @@ code_change(_OldVsn, State, _Extra) ->
 terminate(_Reason, #state{host=H, port=P, ssl=Ssl, free=Free, clients=Tid}) ->
     ets:delete(Tid),
     ets:delete(?MODULE,{H,P,Ssl}),
-    [lhttpc_sock:close(Socket,Ssl) || {Socket, _TimerRef} <- Free],
+    lists:foreach(fun ({Socket, _TimerRef}) ->
+                          lhttpc_stats:record(close_connection_local, Socket),
+                          lhttpc_sock:close(Socket,Ssl)
+                  end, Free),
     ok.
 
 %%%%%%%%%%%%%%%
@@ -174,7 +186,7 @@ terminate(_Reason, #state{host=H, port=P, ssl=Ssl, free=Free, clients=Tid}) ->
 find_lb(Name = {Host,Port,Ssl}, Args={MaxConn, ConnTimeout}) ->
     case ets:lookup(?MODULE, Name) of
         [] ->
-            case supervisor:start_child(lhttpc_sup, [Host,Port,Ssl,MaxConn,ConnTimeout]) of
+            case supervisor:start_child(lhttpc_lb_sup, [Host,Port,Ssl,MaxConn,ConnTimeout]) of
                 {ok, undefined} -> find_lb(Name,Args);
                 {ok, Pid} -> Pid
             end;
@@ -218,6 +230,7 @@ remove_client(Tid, Pid) ->
 
 -spec remove_socket(socket(), #state{}) -> #state{}.
 remove_socket(Socket, S = #state{ssl=Ssl, free=Free}) ->
+    lhttpc_stats:record(close_connection_local, Socket),
     lhttpc_sock:close(Socket, Ssl),
     S#state{free=drop_and_cancel(Socket,Free)}.
 
