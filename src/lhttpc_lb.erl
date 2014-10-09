@@ -13,14 +13,14 @@
 %% TODO: transfert_socket, in case of checkout+give_away
 
 -record(state, {host :: host(),
-                port :: port(),
+                port :: port_number(),
                 ssl :: boolean(),
                 max_conn :: max_connections(),
                 timeout :: timeout(),
                 clients :: ets:tid(),
                 free=[] :: list()}).
 
--export_types([host/0, port/0, max_connections/0, connection_timeout/0]).
+-export_types([host/0, port_number/0, max_connections/0, connection_timeout/0]).
 -type host() :: inet:ip_address()|string().
 -type port_number() :: 1..65535.
 -type max_connections() :: pos_integer().
