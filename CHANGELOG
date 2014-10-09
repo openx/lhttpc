@@ -1,3 +1,6 @@
+Version 1.4.0:
+* Add lhttpc_stats module.
+
 Version 1.3.3:
 * Add lhttpc_dns:check_table function.
 * Log a warning when the DNS cache is reset.

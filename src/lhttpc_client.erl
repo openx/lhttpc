@@ -157,6 +157,7 @@ send_request(#client_state{socket = undefined} = State) ->
     SocketOptions = [binary, {packet, http}, {active, false} | ConnectOptions],
     case lhttpc_sock:connect(Host, Port, SocketOptions, Timeout, Ssl) of
         {ok, Socket} ->
+            lhttpc_stats:record(open_connection, {{Host, Port, Ssl}, Socket}),
             send_request(State#client_state{socket = Socket});
         {error, etimedout} ->
             % TCP stack decided to give up
@@ -170,6 +171,7 @@ send_request(State) ->
     Socket = State#client_state.socket,
     Ssl = State#client_state.ssl,
     Request = State#client_state.request,
+    lhttpc_stats:record(start_request, {{State#client_state.host, State#client_state.port, Ssl}, Socket, self()}),
     case lhttpc_sock:send(Socket, Request, Ssl) of
         ok ->
             if
@@ -177,6 +179,7 @@ send_request(State) ->
                 not State#client_state.partial_upload -> read_response(State)
             end;
         {error, closed} ->
+            lhttpc_stats:record(close_connection_remote, Socket),
             lhttpc_sock:close(Socket, Ssl),
             NewState = State#client_state{
                 socket = undefined,
@@ -184,6 +187,7 @@ send_request(State) ->
             },
             send_request(NewState);
         {error, Reason} ->
+            lhttpc_stats:record(close_connection_remote, Socket),
             lhttpc_sock:close(Socket, Ssl),
             erlang:error(Reason)
     end.
@@ -232,6 +236,7 @@ encode_body_part(#client_state{chunked_upload = false}, Data) ->
 check_send_result(_State, ok) ->
     ok;
 check_send_result(#client_state{socket = Sock, ssl = Ssl}, {error, Reason}) ->
+    lhttpc_stats:record(close_connection_remote, Sock),
     lhttpc_sock:close(Sock, Ssl),
     throw(Reason).
 
@@ -270,6 +275,7 @@ read_response(State, Vsn, {StatusCode, _} = Status, Hdrs) ->
             % the request on the wire or the server has some issues and is
             % closing connections without sending responses.
             % If this the first attempt to send the request, we will try again.
+            lhttpc_stats:record(close_connection_remote, Socket),
             lhttpc_sock:close(Socket, Ssl),
             NewState = State#client_state{
                 socket = undefined,
@@ -277,6 +283,7 @@ read_response(State, Vsn, {StatusCode, _} = Status, Hdrs) ->
             },
             send_request(NewState);
         {error, timeout} ->
+            lhttpc_stats:record(close_connection_timeout, self()),
             lhttpc_sock:close(Socket, Ssl),
             NewState = State#client_state{
                 socket = undefined,
@@ -398,6 +405,7 @@ read_body_part(#client_state{part_size = infinity} = State, _ContentLength) ->
         {ok, Data} ->
             Data;
         {error, Reason} ->
+            lhttpc_stats:record(close_connection_remote, State#client_state.socket),
             erlang:error(Reason)
     end;
 read_body_part(#client_state{part_size = PartSize} = State, ContentLength)
@@ -409,6 +417,7 @@ read_body_part(#client_state{part_size = PartSize} = State, ContentLength)
         {ok, Data} ->
             Data;
         {error, Reason} ->
+            lhttpc_stats:record(close_connection_remote, Socket),
             erlang:error(Reason)
     end;
 read_body_part(#client_state{part_size = PartSize} = State, ContentLength)
@@ -419,6 +428,7 @@ read_body_part(#client_state{part_size = PartSize} = State, ContentLength)
         {ok, Data} ->
             Data;
         {error, Reason} ->
+            lhttpc_stats:record(close_connection_remote, Socket),
             erlang:error(Reason)
     end.
 
@@ -427,6 +437,7 @@ read_length(Hdrs, Ssl, Socket, Length) ->
         {ok, Data} ->
             {Data, Hdrs};
         {error, Reason} ->
+            lhttpc_stats:record(close_connection_remote, Socket),
             erlang:error(Reason)
     end.
 
@@ -476,6 +487,7 @@ read_chunk_size(Socket, Ssl) ->
         {ok, ChunkSizeExt} ->
             chunk_size(ChunkSizeExt);
         {error, Reason} ->
+            lhttpc_stats:record(close_connection_remote, Socket),
             erlang:error(Reason)
     end.
 
@@ -529,6 +541,7 @@ read_partial_chunk(Socket, Ssl, Size, ChunkSize) ->
         {ok, Chunk} ->
             {Chunk, ChunkSize - Size};
         {error, Reason} ->
+            lhttpc_stats:record(close_connection_remote, Socket),
             erlang:error(Reason)
     end.
 
@@ -540,6 +553,7 @@ read_chunk(Socket, Ssl, Size) ->
         {ok, Data} ->
             erlang:error({invalid_chunk, Data});
         {error, Reason} ->
+            lhttpc_stats:record(close_connection_remote, Socket),
             erlang:error(Reason)
     end.
 
@@ -552,6 +566,7 @@ read_trailers(Socket, Ssl, Trailers, Hdrs) ->
             Header = {lhttpc_lib:maybe_atom_to_list(Name), Value},
             read_trailers(Socket, Ssl, [Header | Trailers], [Header | Hdrs]);
         {error, {http_error, Data}} ->
+            lhttpc_stats:record(close_connection_remote, Socket),
             erlang:error({bad_trailer, Data})
     end.
 
@@ -589,6 +604,7 @@ read_infinite_body_part(#client_state{socket = Socket, ssl = Ssl}) ->
         {error, closed} ->
             http_eob;
         {error, Reason} ->
+            lhttpc_stats:record(close_connection_remote, Socket),
             erlang:error(Reason)
     end.
 
@@ -616,6 +632,7 @@ read_until_closed(Socket, Acc, Hdrs, Ssl) ->
         {error, closed} ->
             {Acc, Hdrs};
         {error, Reason} ->
+            lhttpc_stats:record(close_connection_remote, Socket),
             erlang:error(Reason)
     end.
 
@@ -623,7 +640,12 @@ maybe_close_socket(Socket, Ssl, {1, Minor}, ReqHdrs, RespHdrs) when Minor >= 1->
     ClientConnection = ?CONNECTION_HDR(ReqHdrs, "keep-alive"),
     ServerConnection = ?CONNECTION_HDR(RespHdrs, "keep-alive"),
     if
-        ClientConnection =:= "close"; ServerConnection =:= "close" ->
+        ClientConnection =:= "close" ->
+            lhttpc_stats:record(close_connection_local, Socket),
+            lhttpc_sock:close(Socket, Ssl),
+            undefined;
+        ServerConnection =:= "close" ->
+            lhttpc_stats:record(close_connection_remote, Socket),
             lhttpc_sock:close(Socket, Ssl),
             undefined;
         ClientConnection =/= "close", ServerConnection =/= "close" ->
@@ -633,7 +655,12 @@ maybe_close_socket(Socket, Ssl, _, ReqHdrs, RespHdrs) ->
     ClientConnection = ?CONNECTION_HDR(ReqHdrs, "keep-alive"),
     ServerConnection = ?CONNECTION_HDR(RespHdrs, "close"),
     if
-        ClientConnection =:= "close"; ServerConnection =/= "keep-alive" ->
+        ClientConnection =:= "close" ->
+            lhttpc_stats:record(close_connection_local, Socket),
+            lhttpc_sock:close(Socket, Ssl),
+            undefined;
+        ServerConnection =/= "keep-alive" ->
+            lhttpc_stats:record(close_connection_remote, Socket),
             lhttpc_sock:close(Socket, Ssl),
             undefined;
         ClientConnection =/= "close", ServerConnection =:= "keep-alive" ->
