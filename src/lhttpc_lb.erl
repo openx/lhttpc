@@ -23,6 +23,7 @@
 -export_types([host/0, port_number/0, max_connections/0, connection_timeout/0]).
 -type host() :: inet:ip_address()|string().
 -type port_number() :: 1..65535.
+-type socket() :: gen_tcp:socket() | ssl:sslsocket().
 -type max_connections() :: pos_integer().
 -type connection_timeout() :: timeout().
 
@@ -34,7 +35,7 @@ start_link(Host, Port, Ssl, MaxConn, ConnTimeout) ->
 
 -spec checkout(host(), port_number(), SSL::boolean(),
                max_connections(), connection_timeout()) ->
-        {ok, port()} | retry_later | no_socket.
+        {ok, socket()} | retry_later | no_socket.
 checkout(Host, Port, Ssl, MaxConn, ConnTimeout) ->
     Lb = find_lb({Host,Port,Ssl}, {MaxConn, ConnTimeout}),
     gen_server:call(Lb, {checkout, self()}, infinity).
@@ -48,7 +49,7 @@ checkin(Host, Port, Ssl) ->
     end.
 
 %% Called when we're done and the socket can still be reused
--spec checkin(host(), port_number(), SSL::boolean(), Socket::port()) -> ok.
+-spec checkin(host(), port_number(), SSL::boolean(), Socket::socket()) -> ok.
 checkin(Host, Port, Ssl, Socket) ->
     case find_lb({Host,Port,Ssl}) of
         {error, undefined} ->
@@ -212,12 +213,12 @@ remove_client(Tid, Pid) ->
             ets:delete(Tid, Pid)
     end.
 
--spec remove_socket(port(), #state{}) -> #state{}.
+-spec remove_socket(socket(), #state{}) -> #state{}.
 remove_socket(Socket, S = #state{ssl=Ssl, free=Free}) ->
     lhttpc_sock:close(Socket, Ssl),
     S#state{free=drop_and_cancel(Socket,Free)}.
 
--spec drop_and_cancel(port(), [{port(), reference()}]) -> [{port(), reference()}].
+-spec drop_and_cancel(socket(), [{socket(), reference()}]) -> [{socket(), reference()}].
 drop_and_cancel(_, []) -> [];
 drop_and_cancel(Socket, [{Socket, TimerRef} | Rest]) ->
     cancel_timer(TimerRef, Socket),
@@ -225,7 +226,7 @@ drop_and_cancel(Socket, [{Socket, TimerRef} | Rest]) ->
 drop_and_cancel(Socket, [H|T]) ->
     [H | drop_and_cancel(Socket, T)].
 
--spec cancel_timer(reference(), port()) -> ok.
+-spec cancel_timer(reference(), socket()) -> ok.
 cancel_timer(TimerRef, Socket) ->
     case erlang:cancel_timer(TimerRef) of
         false ->
@@ -236,7 +237,7 @@ cancel_timer(TimerRef, Socket) ->
         _ -> ok
     end.
 
--spec start_timer(port(), connection_timeout()) -> reference().
+-spec start_timer(socket(), connection_timeout()) -> reference().
 start_timer(_, infinity) -> make_ref(); % dummy timer
 start_timer(Socket, Timeout) ->
     erlang:send_after(Timeout, self(), {timeout,Socket}).
