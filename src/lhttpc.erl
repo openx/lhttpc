@@ -599,14 +599,10 @@ verify_options([{stream_to, Pid} | Options], Errors) when is_pid(Pid) ->
     verify_options(Options, Errors);
 verify_options([Option | Options], Errors) ->
     verify_options(Options, [Option | Errors]);
-verify_options([], []) ->
-    ok;
 verify_options([], Errors) ->
-    bad_options(Errors).
-
--spec bad_options(options()) -> no_return().
-bad_options(Errors) ->
-    erlang:error({bad_options, Errors}).
+    if length(Errors) > 0 -> erlang:error({bad_options, Errors});
+       true               -> ok
+    end.
 
 -spec verify_partial_download(options(), options()) -> options().
 verify_partial_download([{window_size, infinity} | Options], Errors)->
