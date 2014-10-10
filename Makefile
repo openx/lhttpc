@@ -13,7 +13,7 @@ doc:
 test:
 	$(REBAR) eunit
 
-dialyzer:
+dialyzer: compile
 	$(REBAR) analyze
 
 release: all dialyzer test
