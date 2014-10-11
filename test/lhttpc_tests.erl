@@ -134,7 +134,7 @@ tcp_test_() ->
                 ?_test(bad_url()),
                 ?_test(persistent_connection()),
                 ?_test(request_timeout()),
-                %% ?_test(connection_timeout()),
+                ?_test(connection_timeout()),
                 %% ?_test(suspended_manager()),
                 ?_test(chunked_encoding()),
                 ?_test(partial_upload_identity()),
@@ -379,21 +379,15 @@ request_timeout() ->
     URL = url(Port, "/slow"),
     ?assertEqual({error, timeout}, lhttpc:request(URL, get, [], 50)).
 
-%% This test appear to be designed to test the ConnTimeout.  For it to
-%% work, we need to be able to update the connection timeout of an
-%% existing lhttpc_lb worker, and to find the number of existing
-%% connections.
-%% connection_timeout() ->
-%%     Port = start(gen_tcp, [fun simple_response/5, fun simple_response/5]),
-%%     URL = url(Port, "/close_conn"),
-%%     lhttpc_manager:update_connection_timeout(50), % very short keep alive
-%%     {ok, Response} = lhttpc:request(URL, get, [], 100),
-%%     ?assertEqual({200, "OK"}, status(Response)),
-%%     ?assertEqual(<<?DEFAULT_STRING>>, body(Response)),
-%%     timer:sleep(100),
-%%     ?assertEqual(0,
-%%         lhttpc_manager:connection_count({"localhost", Port, false})),
-%%     lhttpc_manager:update_connection_timeout(300000). % set back
+connection_timeout() ->
+    Port = start(gen_tcp, [fun simple_response/5, fun simple_response/5]),
+    URL = url(Port, "/close_conn"),
+    {ok, Response} = lhttpc:request(URL, get, [], [], 100, [ {connection_timeout, 50} ]),
+    ?assertEqual({0,1}, lhttpc_lb:connection_count("localhost", Port, false)),
+    ?assertEqual({200, "OK"}, status(Response)),
+    ?assertEqual(<<?DEFAULT_STRING>>, body(Response)),
+    timer:sleep(100),
+    ?assertEqual({0,0}, lhttpc_lb:connection_count("localhost", Port, false)).
 
 %% suspended_manager() ->
 %%     Port = start(gen_tcp, [fun simple_response/5, fun simple_response/5]),

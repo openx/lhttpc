@@ -4,7 +4,7 @@
 %%% connection attempts from clients.
 -module(lhttpc_lb).
 -behaviour(gen_server).
--export([start_link/5, checkout/5, checkin/3, checkin/4]).
+-export([start_link/5, checkout/5, checkin/3, checkin/4, connection_count/3]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          code_change/3, terminate/2]).
 
@@ -66,6 +66,17 @@ checkin(Host, Port, Ssl, Socket) ->
             end
     end.
 
+%% Returns a tuple with the number of active (currently in use) and
+%% the number of idle (open but not currently in use) connections for
+%% the host, port, and SSL state.
+-spec connection_count(host(), port_number(), Ssl::boolean()) ->
+                       {ActiveConnections::integer(), IdleConnections::integer()}.
+connection_count(Host, Port, Ssl) ->
+    case find_lb({Host,Port,Ssl}) of
+        {error, undefined} -> {0, 0};
+        {ok, Pid} -> gen_server:call(Pid, {connection_count})
+    end.
+
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%% GEN_SERVER CALLBACKS %%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -109,6 +120,9 @@ handle_call({checkout,Pid}, _From, S = #state{free=[{Taken,Timer}|Free], clients
             cancel_timer(Timer, Taken),
             handle_call({checkout,Pid}, _From, S#state{free=Free})
     end;
+handle_call({connection_count}, _From, S = #state{free=Free, clients=Tid}) ->
+    {reply, {ets:info(Tid, size), length(Free)}, S};
+
 handle_call(_Msg, _From, S) ->
     {noreply, S}.
 
