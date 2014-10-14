@@ -4,7 +4,7 @@
 %%% connection attempts from clients.
 -module(lhttpc_lb).
 -behaviour(gen_server).
--export([start_link/5, checkout/5, checkin/3, checkin/4, connection_count/3]).
+-export([start_link/5, checkout/5, checkin/4, connection_count/3]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          code_change/3, terminate/2]).
 
@@ -39,14 +39,6 @@ start_link(Host, Port, Ssl, MaxConn, ConnTimeout) ->
 checkout(Host, Port, Ssl, MaxConn, ConnTimeout) ->
     Lb = find_lb({Host,Port,Ssl}, {MaxConn, ConnTimeout}),
     gen_server:call(Lb, {checkout, self()}, infinity).
-
-%% Called when the socket has died and we're done
--spec checkin(host(), port_number(), SSL::boolean()) -> ok.
-checkin(Host, Port, Ssl) ->
-    case find_lb({Host,Port,Ssl}) of
-        {error, undefined} -> ok; % LB is dead. Pretend it's fine -- we don't care
-        {ok, Pid} -> gen_server:cast(Pid, {checkin, self()})
-    end.
 
 %% Called when we're done and the socket can still be reused
 -spec checkin(host(), port_number(), SSL::boolean(), Socket::socket()) -> ok.
@@ -126,9 +118,6 @@ handle_call({connection_count}, _From, S = #state{free=Free, clients=Tid}) ->
 handle_call(_Msg, _From, S) ->
     {noreply, S}.
 
-handle_cast({checkin, Pid}, S = #state{clients=Tid}) ->
-    remove_client(Tid, Pid),
-    noreply_maybe_shutdown(S);
 handle_cast({checkin, Pid, Socket}, S = #state{ssl=Ssl, clients=Tid, free=Free, timeout=T}) ->
     remove_client(Tid, Pid),
     %% the client cast function took care of giving us ownership
