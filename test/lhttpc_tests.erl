@@ -183,14 +183,14 @@ simple_get() ->
 
 empty_get() ->
     Port = start(gen_tcp, [fun empty_body/5]),
-    URL = url(Port, "/empty"),
+    URL = url(Port, "/empty_get"),
     {ok, Response} = lhttpc:request(URL, "GET", [], 1000),
     ?assertEqual({200, "OK"}, status(Response)),
     ?assertEqual(<<>>, body(Response)).
 
 get_with_mandatory_hdrs() ->
     Port = start(gen_tcp, [fun simple_response/5]),
-    URL = url(Port, "/host"),
+    URL = url(Port, "/get_with_mandatory_hdrs"),
     Body = <<?DEFAULT_STRING>>,
     Hdrs = [
         {"content-length", integer_to_list(size(Body))},
@@ -202,7 +202,7 @@ get_with_mandatory_hdrs() ->
 
 get_with_connect_options() ->
     Port = start(gen_tcp, [fun empty_body/5]),
-    URL = url(Port, "/empty"),
+    URL = url(Port, "/get_with_connect_options"),
     Options = [{connect_options, [{ip, {127, 0, 0, 1}}, {port, 0}]}],
     {ok, Response} = lhttpc:request(URL, "GET", [], [], 1000, Options),
     ?assertEqual({200, "OK"}, status(Response)),
@@ -210,35 +210,35 @@ get_with_connect_options() ->
 
 no_content_length() ->
     Port = start(gen_tcp, [fun no_content_length/5]),
-    URL = url(Port, "/no_cl"),
+    URL = url(Port, "/no_content_length"),
     {ok, Response} = lhttpc:request(URL, "GET", [], 1000),
     ?assertEqual({200, "OK"}, status(Response)),
     ?assertEqual(<<?DEFAULT_STRING>>, body(Response)).
 
 no_content_length_1_0() ->
     Port = start(gen_tcp, [fun no_content_length_1_0/5]),
-    URL = url(Port, "/no_cl"),
+    URL = url(Port, "/no_content_length_1_0"),
     {ok, Response} = lhttpc:request(URL, "GET", [], 1000),
     ?assertEqual({200, "OK"}, status(Response)),
     ?assertEqual(<<?DEFAULT_STRING>>, body(Response)).
 
 get_not_modified() ->
     Port = start(gen_tcp, [fun not_modified_response/5]),
-    URL = url(Port, "/not_modified"),
+    URL = url(Port, "/get_not_modified"),
     {ok, Response} = lhttpc:request(URL, "GET", [], [], 1000),
     ?assertEqual({304, "Not Modified"}, status(Response)),
     ?assertEqual(<<>>, body(Response)).
 
 simple_head() ->
     Port = start(gen_tcp, [fun head_response/5]),
-    URL = url(Port, "/HEAD"),
+    URL = url(Port, "/simple_head"),
     {ok, Response} = lhttpc:request(URL, "HEAD", [], 1000),
     ?assertEqual({200, "OK"}, status(Response)),
     ?assertEqual(<<>>, body(Response)).
 
 simple_head_atom() ->
     Port = start(gen_tcp, [fun head_response/5]),
-    URL = url(Port, "/head"),
+    URL = url(Port, "/simple_head_atom"),
     {ok, Response} = lhttpc:request(URL, head, [], 1000),
     ?assertEqual({200, "OK"}, status(Response)),
     ?assertEqual(<<>>, body(Response)).
@@ -273,7 +273,7 @@ options_content() ->
 
 server_connection_close() ->
     Port = start(gen_tcp, [fun respond_and_close/5]),
-    URL = url(Port, "/close"),
+    URL = url(Port, "/server_connection_close"),
     Body = pid_to_list(self()),
     {ok, Response} = lhttpc:request(URL, "PUT", [], Body, 1000),
     ?assertEqual({200, "OK"}, status(Response)),
@@ -282,7 +282,7 @@ server_connection_close() ->
 
 client_connection_close() ->
     Port = start(gen_tcp, [fun respond_and_wait/5]),
-    URL = url(Port, "/close"),
+    URL = url(Port, "/client_connection_close"),
     Body = pid_to_list(self()),
     Hdrs = [{"Connection", "close"}],
     {ok, _} = lhttpc:request(URL, put, Hdrs, Body, 1000),
@@ -291,7 +291,7 @@ client_connection_close() ->
 
 pre_1_1_server_connection() ->
     Port = start(gen_tcp, [fun pre_1_1_server/5]),
-    URL = url(Port, "/close"),
+    URL = url(Port, "/pre_1_1_server_connection"),
     Body = pid_to_list(self()),
     {ok, _} = lhttpc:request(URL, put, [], Body, 1000),
     % Wait for the server to see that socket has been closed.
@@ -304,7 +304,7 @@ pre_1_1_server_keep_alive() ->
             fun pre_1_1_server_keep_alive/5,
             fun pre_1_1_server/5
         ]),
-    URL = url(Port, "/close"),
+    URL = url(Port, "/pre_1_1_server_keep_alive"),
     Body = pid_to_list(self()),
     {ok, Response1} = lhttpc:request(URL, get, [], [], 1000),
     {ok, Response2} = lhttpc:request(URL, put, [], Body, 1000),
@@ -339,7 +339,7 @@ post() ->
 
 post_100_continue() ->
     Port = start(gen_tcp, [fun copy_body_100_continue/5]),
-    URL = url(Port, "/post"),
+    URL = url(Port, "/post_100_continue"),
     {X, Y, Z} = now(),
     Body = [
         "This is a rather simple post :)",
@@ -362,7 +362,7 @@ persistent_connection() ->
             fun simple_response/5,
             fun copy_body/5
         ]),
-    URL = url(Port, "/persistent"),
+    URL = url(Port, "/persistent_connection"),
     {ok, FirstResponse} = lhttpc:request(URL, "GET", [], 1000),
     Headers = [{"KeepAlive", "300"}], % shouldn't be needed
     {ok, SecondResponse} = lhttpc:request(URL, "GET", Headers, 1000),
@@ -376,12 +376,12 @@ persistent_connection() ->
 
 request_timeout() ->
     Port = start(gen_tcp, [fun very_slow_response/5]),
-    URL = url(Port, "/slow"),
+    URL = url(Port, "/request_timeout"),
     ?assertEqual({error, timeout}, lhttpc:request(URL, get, [], 50)).
 
 connection_timeout() ->
     Port = start(gen_tcp, [fun simple_response/5, fun simple_response/5]),
-    URL = url(Port, "/close_conn"),
+    URL = url(Port, "/connection_timeout"),
     {ok, Response} = lhttpc:request(URL, get, [], [], 100, [ {connection_timeout, 50} ]),
     ?assertEqual({0,1}, lhttpc_lb:connection_count("localhost", Port, false)),
     ?assertEqual({200, "OK"}, status(Response)),
@@ -407,7 +407,7 @@ connection_timeout() ->
 
 chunked_encoding() ->
     Port = start(gen_tcp, [fun chunked_response/5, fun chunked_response_t/5]),
-    URL = url(Port, "/chunked"),
+    URL = url(Port, "/chunked_encoding"),
     {ok, FirstResponse} = lhttpc:request(URL, get, [], 50),
     ?assertEqual({200, "OK"}, status(FirstResponse)),
     ?assertEqual(<<?DEFAULT_STRING>>, body(FirstResponse)),
@@ -425,7 +425,7 @@ chunked_encoding() ->
 
 partial_upload_identity() ->
     Port = start(gen_tcp, [fun simple_response/5, fun simple_response/5]),
-    URL = url(Port, "/partial_upload"),
+    URL = url(Port, "/partial_upload_identity"),
     Body = [<<"This">>, <<" is ">>, <<"chunky">>, <<" stuff!">>],
     Hdrs = [{"Content-Length", integer_to_list(iolist_size(Body))}],
     Options = [{partial_upload, 1}],
@@ -447,7 +447,7 @@ partial_upload_identity() ->
 
 partial_upload_identity_iolist() ->
     Port = start(gen_tcp, [fun simple_response/5, fun simple_response/5]),
-    URL = url(Port, "/partial_upload"),
+    URL = url(Port, "/partial_upload_identity_iolist"),
     Body = ["This", [<<" ">>, $i, $s, [" "]], <<"chunky">>, [<<" stuff!">>]],
     Hdrs = [{"Content-Length", integer_to_list(iolist_size(Body))}],
     Options = [{partial_upload, 1}],
@@ -533,7 +533,7 @@ partial_download_identity() ->
 
 partial_download_infinity_window() ->
     Port = start(gen_tcp, [fun large_response/5]),
-    URL = url(Port, "/partial_download_identity"),
+    URL = url(Port, "/partial_download_infinity_window"),
     PartialDownload = [
         {window_size, infinity}
     ],
@@ -545,7 +545,7 @@ partial_download_infinity_window() ->
 
 partial_download_no_content_length() ->
     Port = start(gen_tcp, [fun no_content_length/5]),
-    URL = url(Port, "/no_cl"),
+    URL = url(Port, "/partial_download_no_content_length"),
     PartialDownload = [
         {window_size, 1}
     ],
@@ -557,7 +557,7 @@ partial_download_no_content_length() ->
 
 partial_download_no_content() ->
     Port = start(gen_tcp, [fun no_content_response/5]),
-    URL = url(Port, "/partial_download_identity"),
+    URL = url(Port, "/partial_download_no_content"),
     PartialDownload = [
         {window_size, 1}
     ],
@@ -569,7 +569,7 @@ partial_download_no_content() ->
 
 limited_partial_download_identity() ->
     Port = start(gen_tcp, [fun large_response/5]),
-    URL = url(Port, "/partial_download_identity"),
+    URL = url(Port, "/limited_partial_download_identity"),
     PartialDownload = [
         {window_size, 1},
         {part_size, 512} % bytes
@@ -583,7 +583,7 @@ limited_partial_download_identity() ->
 
 partial_download_chunked() ->
     Port = start(gen_tcp, [fun large_chunked_response/5]),
-    URL = url(Port, "/partial_download_identity"),
+    URL = url(Port, "/partial_download_chunked"),
     PartialDownload = [
         {window_size, 1},
         {part_size, length(?LONG_BODY_PART) * 3}
@@ -597,7 +597,7 @@ partial_download_chunked() ->
 
 partial_download_chunked_infinite_part() ->
     Port = start(gen_tcp, [fun large_chunked_response/5]),
-    URL = url(Port, "/partial_download_identity"),
+    URL = url(Port, "/partial_download_chunked_infinite_part"),
     PartialDownload = [
         {window_size, 1},
         {part_size, infinity}
@@ -611,7 +611,7 @@ partial_download_chunked_infinite_part() ->
 
 partial_download_smallish_chunks() ->
     Port = start(gen_tcp, [fun large_chunked_response/5]),
-    URL = url(Port, "/partial_download_identity"),
+    URL = url(Port, "/partial_download_smallish_chunks"),
     PartialDownload = [
         {window_size, 1},
         {part_size, length(?LONG_BODY_PART) - 1}
@@ -625,7 +625,7 @@ partial_download_smallish_chunks() ->
 
 partial_download_slow_chunks() ->
     Port = start(gen_tcp, [fun slow_chunked_response/5]),
-    URL = url(Port, "/slow"),
+    URL = url(Port, "/partial_download_slow_chunks"),
     PartialDownload = [
         {window_size, 1},
         {part_size, length(?LONG_BODY_PART) div 2}
@@ -644,14 +644,14 @@ close_connection() ->
 
 ssl_get() ->
     Port = start(ssl, [fun simple_response/5]),
-    URL = ssl_url(Port, "/simple"),
+    URL = ssl_url(Port, "/ssl_get"),
     {ok, Response} = lhttpc:request(URL, "GET", [], 1000),
     ?assertEqual({200, "OK"}, status(Response)),
     ?assertEqual(<<?DEFAULT_STRING>>, body(Response)).
 
 ssl_post() ->
     Port = start(ssl, [fun copy_body/5]),
-    URL = ssl_url(Port, "/simple"),
+    URL = ssl_url(Port, "/ssl_post"),
     Body = "SSL Test <o/",
     BinaryBody = list_to_binary(Body),
     {ok, Response} = lhttpc:request(URL, "POST", [], Body, 1000),
