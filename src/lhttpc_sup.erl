@@ -51,6 +51,7 @@ start_link(Args) ->
 %% @hidden
 init(Opts) ->
     init_ets(Opts),
+    lhttpc_dns:init(),
     {ok, {{simple_one_for_one, 10, 1}, [
         {load_balancer,
          {lhttpc_lb, start_link, []},

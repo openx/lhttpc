@@ -53,31 +53,41 @@
 %%   Reason = atom()
 %% @doc
 %% Connects to `Host' and `Port'.
-%% Will use the `ssl' module if `SslFlag' is `true' and gen_tcp otherwise.
+%% Will use the `ssl' module if `SslFlag' is `true' and `gen_tcp' otherwise.
 %% `Options' are the normal `gen_tcp' or `ssl' Options.
 %% @end
 -spec connect(host(), integer(), socket_options(), timeout(), boolean()) ->
     {ok, socket()} | {error, atom()}.
 connect(Host, Port, Options, Timeout, true) ->
-    % Avoid port leak with potential race condition in case of timeout
-    Flag = process_flag(trap_exit, true),
-    Res = ssl:connect(Host, Port, Options, Timeout),
-    receive
-          {'EXIT',_Pid,timeout} -> exit(timeout)
-        after 0 ->
-                process_flag(trap_exit, Flag),
-                Res
-        end;
+    case lhttpc_dns:lookup(Host) of
+        undefined ->
+            {error, nxdomain};
+        IpAddr ->
+            %% Avoid port leak with potential race condition in case of timeout
+            Flag = process_flag(trap_exit, true),
+            Res = ssl:connect(IpAddr, Port, Options, Timeout),
+            receive
+                {'EXIT', _Pid, timeout} -> exit(timeout)
+            after 0 ->
+                    process_flag(trap_exit, Flag),
+                    Res
+            end
+    end;
 connect(Host, Port, Options, Timeout, false) ->
-    % Avoid port leak with potential race condition in case of timeout
-    Flag = process_flag(trap_exit, true),
-    Res = gen_tcp:connect(Host, Port, Options, Timeout),
-    receive
-          {'EXIT',_Pid,timeout} -> exit(timeout)
-        after 0 ->
-                process_flag(trap_exit, Flag),
-                Res
-        end.
+    case lhttpc_dns:lookup(Host) of
+        undefined ->
+            {error, nxdomain};
+        IpAddr ->
+            %% Avoid port leak with potential race condition in case of timeout
+            Flag = process_flag(trap_exit, true),
+            Res = gen_tcp:connect(IpAddr, Port, Options, Timeout),
+            receive
+                {'EXIT', _Pid, timeout} -> exit(timeout)
+            after 0 ->
+                    process_flag(trap_exit, Flag),
+                    Res
+            end
+    end.
 
 %% @spec (Socket, SslFlag) -> {ok, Data} | {error, Reason}
 %%   Socket = socket()
