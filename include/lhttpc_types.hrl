@@ -30,8 +30,12 @@
 -type socket() :: _.
 
 -type option() ::
+        {connect_options, list()} |
         {connect_timeout, timeout()} |
+        {connection_timeout, non_neg_integer() | infinity} |
+        {max_connections, non_neg_integer()} |
         {send_retry, non_neg_integer()} |
+        {stream_to, pid()} |
         {partial_upload, non_neg_integer() | infinity} |
         {partial_download, pid(), non_neg_integer() | infinity}.
 
