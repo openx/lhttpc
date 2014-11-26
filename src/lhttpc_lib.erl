@@ -115,6 +115,8 @@ split_host([$: | PortPath], Host) ->
     {lists:reverse(Host), PortPath};
 split_host([$/ | _] = PortPath, Host) ->
     {lists:reverse(Host), PortPath};
+split_host([$? | _] = PortPath, Host) ->
+    {lists:reverse(Host), PortPath};
 split_host([H | T], Host) ->
     split_host(T, [H | Host]);
 split_host([], Host) ->
@@ -124,6 +126,10 @@ split_port(http, [$/ | _] = Path, []) ->
     {80, Path};
 split_port(https, [$/ | _] = Path, []) ->
     {443, Path};
+split_port(http, [$? | _] = Path, []) ->
+    {80, Path};
+split_port(https, [$? | _] = Path, []) ->
+    {443, Path};
 split_port(http, [], []) ->
     {80, "/"};
 split_port(https, [], []) ->
@@ -131,6 +137,8 @@ split_port(https, [], []) ->
 split_port(_, [], Port) ->
     {list_to_integer(lists:reverse(Port)), "/"};
 split_port(_,[$/ | _] = Path, Port) ->
+    {list_to_integer(lists:reverse(Port)), Path};
+split_port(_,[$? | _] = Path, Port) ->
     {list_to_integer(lists:reverse(Port)), Path};
 split_port(Scheme, [P | T], Port) ->
     split_port(Scheme, T, [P | Port]).

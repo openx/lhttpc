@@ -46,5 +46,11 @@ parse_url_test_() ->
         ?_assertEqual({"host", 180, "/foo", false},
             lhttpc_lib:parse_url("http://host:180/foo")),
         ?_assertEqual({"host", 180, "/foo/bar", false},
-            lhttpc_lib:parse_url("http://host:180/foo/bar"))
+            lhttpc_lib:parse_url("http://host:180/foo/bar")),
+        ?_assertEqual({"host", 80, "?query", false},
+            lhttpc_lib:parse_url("http://host?query")),
+        ?_assertEqual({"host", 443, "?query", true},
+            lhttpc_lib:parse_url("https://host?query")),
+        ?_assertEqual({"host", 180, "?query", false},
+            lhttpc_lib:parse_url("http://host:180?query"))
     ].
