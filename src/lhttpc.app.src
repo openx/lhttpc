@@ -34,6 +34,7 @@
         {registered, [lhttpc_sup]},
         {applications, [kernel, stdlib, ssl, crypto]},
   {mod, {lhttpc, []}},
-  {env, [{connection_timeout, 300000}]}
+  {env, [{connection_timeout, 300000},
+         {dns_cache, false}]}
  ]}.
 

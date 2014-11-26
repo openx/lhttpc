@@ -51,7 +51,10 @@ start_link(Args) ->
 %% @hidden
 init(Opts) ->
     init_ets(Opts),
-    lhttpc_dns:init(),
+    case application:get_env(dns_cache) of
+        {ok, true} -> lhttpc_dns:init();
+        _          -> ok
+    end,
     {ok, {{simple_one_for_one, 10, 1}, [
         {load_balancer,
          {lhttpc_lb, start_link, []},

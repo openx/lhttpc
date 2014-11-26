@@ -10,7 +10,12 @@
 
 -ifdef(EUNIT).
 
-ssrtb_dns_service_test_ () ->
+lhttpc_dns_disabled_test () ->
+  %% Verify that if lhttpc_dns is not enabled that lhttpc_dns:lookup
+  %% returns the original hostname.
+  ?assertEqual("example.com", lhttpc_dns:lookup("example.com")).
+
+lhttpc_dns_enabled_test_ () ->
   {inorder,
    {setup, fun lhttpc_dns:create_table/0, fun (_) -> lhttpc_dns:destroy_table() end,
     [ ?_test(test_lookup_uncached())

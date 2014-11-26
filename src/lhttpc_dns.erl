@@ -25,6 +25,7 @@ choose_addr(undefined) -> undefined.
 
 
 os_timestamp() ->
+  %% We wrap os:timestamp so that the unit tests can mock it.
   os:timestamp().
 
 
@@ -34,24 +35,28 @@ os_timestamp() ->
 -define(MIN_CACHE_SECONDS, 300).
 
 
+-spec lookup(Host::string()) -> tuple() | 'undefined' | string().
 lookup (Host) ->
-  Now = lhttpc_dns:os_timestamp(),
-
-  %% Attempt cached lookup.
-  {WantRefresh, CachedIPAddrs} =
-    case ets:lookup(?MODULE, Host) of
-      [] ->                                                     % Not in cache.
-        {true, undefined};
-      [{_, IPAddrs0, Expiration}] when Now >= Expiration ->     % Cache expired.
-        {true, IPAddrs0};
-      [{_, IPAddrs0, _Expiration}] ->                           % Cache OK.
-        {false, IPAddrs0}
+  %% Attempt cache lookup.
+  {WantRefresh, CachedIPAddrs, Now} =
+    try ets:lookup(?MODULE, Host) of
+      [] ->                                     % Not in cache.
+        {true, undefined, lhttpc_dns:os_timestamp()};
+      [{_, IPAddrs0, Expiration}] ->            % Cached but maybe stale.
+        Now0 = lhttpc_dns:os_timestamp(),
+        {Now0 >= Expiration, IPAddrs0, Now0}
+    catch
+      error:badarg ->
+        {fallback, undefined, undefined}
     end,
 
   case WantRefresh of
+    fallback ->
+      %% Caching is not enabled.  Return original Host; gen_tcp will resolve it.
+      Host;
     false ->
       %% Cached lookup succeeded
-      IPAddrs = CachedIPAddrs;
+      choose_addr(CachedIPAddrs);
     true ->
       %% Cached lookup failed.  Perform lookup and cache results.
       {IPAddrs, TTL} =
@@ -64,10 +69,9 @@ lookup (Host) ->
             end;
           SuccessLookup -> SuccessLookup
         end,
-      ets:insert(?MODULE, {Host, IPAddrs, timestamp_add_seconds(Now, TTL)})
-  end,
-
-  choose_addr(IPAddrs).
+      ets:insert(?MODULE, {Host, IPAddrs, timestamp_add_seconds(Now, TTL)}),
+      choose_addr(IPAddrs)
+  end.
 
 
 -spec lookup_uncached(Host::string()) -> {IPAddrs::tuple()|'undefined', CacheSeconds::non_neg_integer()}.
