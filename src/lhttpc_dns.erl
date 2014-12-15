@@ -32,7 +32,7 @@ os_timestamp() ->
 -define(ERROR_CACHE_SECONDS, 1).
 -define(SUCCESS_CACHE_EXTRA_SECONDS, 2).
 -define(MAX_CACHE_SECONDS, (3600 * 24)).
--define(MIN_CACHE_SECONDS, 300).
+-define(MIN_CACHE_SECONDS_DEFAULT, 300).
 
 
 -spec lookup(Host::string()) -> tuple() | 'undefined' | string().
@@ -65,7 +65,7 @@ lookup (Host) ->
             %% If the lookup fails but we have a stale cached result, keep it.
             case CachedIPAddrs of
               undefined -> FailureLookup;
-              _         -> {CachedIPAddrs, ?MIN_CACHE_SECONDS}
+              _         -> {CachedIPAddrs, min_cache_seconds()}
             end;
           SuccessLookup -> SuccessLookup
         end,
@@ -96,7 +96,7 @@ lookup_uncached (Host) ->
                                 %% 2 seconds.
                                 {[ IPAddr | IPAddrAcc ], min(MinTTL, TTL + ?SUCCESS_CACHE_EXTRA_SECONDS)}
                             end, {[], ?MAX_CACHE_SECONDS}, Answers),
-              {list_to_tuple(IPAddrs), max(TTL, ?MIN_CACHE_SECONDS)}
+              {list_to_tuple(IPAddrs), max(TTL, min_cache_seconds())}
           end;
         _Error ->
           %% Cache an error lookup for one second.
@@ -112,6 +112,14 @@ timestamp_add_seconds ({MegaSeconds, Seconds, MicroSeconds}, AddSeconds) ->
       {MegaSeconds + (S1 div ?TEN_E6), S1 rem ?TEN_E6, MicroSeconds};
      true ->
       {MegaSeconds, S1, MicroSeconds}
+  end.
+
+
+-spec min_cache_seconds() -> MinCacheSeconds::non_neg_integer().
+min_cache_seconds() ->
+  case application:get_env(lhttpc, dns_cache_min_cache_seconds) of
+    {ok, MinCacheSeconds} -> MinCacheSeconds;
+    _                     -> ?MIN_CACHE_SECONDS_DEFAULT
   end.
 
 
