@@ -33,6 +33,7 @@ os_timestamp() ->
 -define(SUCCESS_CACHE_EXTRA_SECONDS, 2).
 -define(MAX_CACHE_SECONDS, (3600 * 24)).
 -define(MIN_CACHE_SECONDS_DEFAULT, 300).
+-define(MAX_CACHE_SIZE, 10000).
 
 
 -spec lookup(Host::string()) -> tuple() | 'undefined' | string().
@@ -69,7 +70,7 @@ lookup (Host) ->
             end;
           SuccessLookup -> SuccessLookup
         end,
-      ets:insert(?MODULE, {Host, IPAddrs, timestamp_add_seconds(Now, TTL)}),
+      ets_insert_bounded(?MODULE, {Host, IPAddrs, timestamp_add_seconds(Now, TTL)}),
       choose_addr(IPAddrs)
   end.
 
@@ -103,6 +104,18 @@ lookup_uncached (Host) ->
           {undefined, ?ERROR_CACHE_SECONDS}
       end
   end.
+
+
+-spec ets_insert_bounded(Tab::ets:tab(), Entry::term()) -> 'true'.
+%% Insert the row `Entry' into the ETS table `Tab'.  Prevent the
+%% unbounded growth of the ETS table by clearing it if it grows to
+%% more than ?MAX_CACHE_SIZE entries.
+ets_insert_bounded(Tab, Entry) ->
+  case ets:info(Tab, size) of
+    N when N >= ?MAX_CACHE_SIZE -> ets:delete_all_objects(Tab);
+    _                           -> ok
+  end,
+  ets:insert(Tab, Entry).
 
 
 -define(TEN_E6, 1000000).
