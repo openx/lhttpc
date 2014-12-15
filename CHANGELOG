@@ -1,4 +1,9 @@
-Version ?:
+Version 1.3.0:
+* Add caching of DNS lookups.  This is disabled by the default
+  lhttpc.app file, but can be overridden by setting the lhttpc
+  dns_cache env parameter.
+
+Version 1.2.8:
 * Add support for connect_options
     * Enables the user to pass socket options, for instance ip and port,
       that will be used when connecting the socket
@@ -75,3 +80,7 @@ Version 1.1.0:
 Version 1.0.0:
 * Initial version
 * Persistent connections have hardcoded timeout
+
+# Local variables:
+# mode: text
+# End:
