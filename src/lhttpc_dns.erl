@@ -105,14 +105,20 @@ lookup_uncached (Host) ->
             [] -> {undefined, ?ERROR_CACHE_SECONDS};
             Answers ->
               {IPAddrs, TTL} =
-                lists:foldl(fun (Answer, {IPAddrAcc, MinTTL}) ->
-                                [ IPAddr, TTL ] = inet_dns:rr(Answer, [ data, ttl ]),
-                                %% Cache a successful lookup for an additional
-                                %% 2 seconds, to avoid refetching an entry
-                                %% from the local DNS resolver right before it
-                                %% refreshes its own cache.
-                                {[ IPAddr | IPAddrAcc ], min(MinTTL, TTL + ?SUCCESS_CACHE_EXTRA_SECONDS)}
-                            end, {[], ?MAX_CACHE_SECONDS}, Answers),
+                lists:foldl(
+                  fun (Answer, {IPAddrAcc, MinTTL}) ->
+                      case inet_dns:rr(Answer, [ type, data, ttl ]) of
+                        [ a, IPAddr, TTL ] ->
+                          %% Cache a successful lookup for an additional
+                          %% 2 seconds, to avoid refetching an entry
+                          %% from the local DNS resolver right before it
+                          %% refreshes its own cache.
+                          {[ IPAddr | IPAddrAcc ], min(MinTTL, TTL + ?SUCCESS_CACHE_EXTRA_SECONDS)};
+                        _ ->
+                          %% Ignore type=cname records in the answers.
+                          {IPAddrAcc, MinTTL}
+                      end
+                  end, {[], ?MAX_CACHE_SECONDS}, Answers),
               {list_to_tuple(IPAddrs), max(TTL, min_cache_seconds())}
           end;
         _Error ->
