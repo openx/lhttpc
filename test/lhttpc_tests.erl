@@ -113,6 +113,8 @@ tcp_test_() ->
         {setup, fun start_app/0, fun stop_app/1, [
                 ?_test(simple_get()),
                 ?_test(empty_get()),
+                ?_test(get_no_content()),
+                ?_test(post_no_content()),
                 ?_test(get_with_mandatory_hdrs()),
                 ?_test(get_with_connect_options()),
                 ?_test(no_content_length()),
@@ -187,6 +189,12 @@ empty_get() ->
     {ok, Response} = lhttpc:request(URL, "GET", [], 1000),
     ?assertEqual({200, "OK"}, status(Response)),
     ?assertEqual(<<>>, body(Response)).
+
+get_no_content() ->
+    no_content(get, 2).
+
+post_no_content() ->
+    no_content("POST", 3).
 
 get_with_mandatory_hdrs() ->
     Port = start(gen_tcp, [fun simple_response/5]),
@@ -722,6 +730,21 @@ simple(Method) ->
     ?assertEqual(200, StatusCode),
     ?assertEqual("OK", ReasonPhrase),
     ?assertEqual(<<?DEFAULT_STRING>>, body(Response)).
+
+no_content(Method, Count) ->
+    Responses = lists:duplicate(Count, fun no_content_response/5),
+    Port = start(gen_tcp, Responses),
+    URL = url(Port, "/" ++ lhttpc_lib:maybe_atom_to_list(Method) ++ "_no_content"),
+    lists:foreach(
+      fun (_) ->
+              {ok, Response} = lhttpc:request(URL, Method, [], <<>>, 100,
+                                              [ {connect_timeout, 100},
+                                                {connection_timeout, 5000},
+                                                {max_connections, 3} ]),
+              ?assertEqual({204, "OK"}, status(Response)),
+              ?assertEqual(<<>>, body(Response)),
+              timer:sleep(100)
+      end, Responses).
 
 url(Port, Path) ->
     "http://localhost:" ++ integer_to_list(Port) ++ Path.
