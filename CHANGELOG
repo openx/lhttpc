@@ -1,3 +1,6 @@
+Version 1.3.2:
+* Add lhttpc_dns:create_table_if_not_exists function.
+
 Version 1.3.1:
 * DNS caching fix: Treat a DNS lookup that succeeds but returns no A
   records as a failure.

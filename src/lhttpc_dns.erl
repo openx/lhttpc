@@ -1,7 +1,8 @@
 -module(lhttpc_dns).
 
--export([ init/0
+-export([ init/1
         , create_table/0
+        , check_table/0
         , destroy_table/0
         , reset_table/0
         , lookup/1
@@ -10,7 +11,7 @@
         ]).
 
 
-init () ->
+init (_Args) ->
   create_table().
 
 choose_addr(IPAddrs) when is_tuple(IPAddrs) ->
@@ -181,3 +182,10 @@ destroy_table() ->
 
 reset_table() ->
   ets:delete_all_objects(?MODULE).
+
+check_table () ->
+  case ets:info(?MODULE, size) of
+    undefined -> catch create_table(),
+                 {table_missing, 0};
+    N         -> {ok, N}
+  end.

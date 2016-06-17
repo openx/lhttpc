@@ -52,7 +52,7 @@ start_link(Args) ->
 init(Opts) ->
     init_ets(Opts),
     case application:get_env(dns_cache) of
-        {ok, true} -> lhttpc_dns:init();
+        {ok, true} -> lhttpc_dns:init(ok);
         _          -> ok
     end,
     {ok, {{simple_one_for_one, 10, 1}, [
