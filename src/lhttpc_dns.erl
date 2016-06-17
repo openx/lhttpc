@@ -136,7 +136,8 @@ lookup_uncached (Host) ->
 %% more than ?MAX_CACHE_SIZE entries.
 ets_insert_bounded(Tab, Entry) ->
   case ets:info(Tab, size) of
-    N when N >= ?MAX_CACHE_SIZE -> ets:delete_all_objects(Tab);
+    N when N >= ?MAX_CACHE_SIZE -> error_logger:warning_msg("lhttpc_dns cache full; resetting\n"),
+                                   ets:delete_all_objects(Tab);
     _                           -> ok
   end,
   ets:insert(Tab, Entry).
