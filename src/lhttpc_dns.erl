@@ -2,6 +2,7 @@
 
 -export([ init/0
         , create_table/0
+        , create_table_if_not_exists/0
         , destroy_table/0
         , reset_table/0
         , lookup/1
@@ -181,3 +182,10 @@ destroy_table() ->
 
 reset_table() ->
   ets:delete_all_objects(?MODULE).
+
+create_table_if_not_exists () ->
+  case ets:info(?MODULE, size) of
+    undefined -> catch create_table(),
+                 {table_created, 0};
+    N         -> {ok, N}
+  end.
