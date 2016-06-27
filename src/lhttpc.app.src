@@ -35,7 +35,7 @@
         {applications, [kernel, stdlib, ssl, crypto]},
   {mod, {lhttpc, []}},
   {env, [{connection_timeout, 300000},
-         {dns_cache, false},
+         {dns_cache, true},
          {dns_cache_min_cache_seconds, 300}]}
  ]}.
 
