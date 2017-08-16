@@ -2,14 +2,6 @@
 
 -include_lib("eunit/include/eunit.hrl").
 
-
-
--ifdef(HAVE_EUNIT).
--include_lib("eunit/include/eunit.hrl").
--endif.
-
--ifdef(EUNIT).
-
 lhttpc_dns_disabled_test () ->
   %% Verify that if lhttpc_dns is not enabled that lhttpc_dns:lookup
   %% returns the original hostname.
@@ -121,5 +113,3 @@ test_lookup () ->
 
   meck:unload(rand),
   meck:unload(lhttpc_dns).
-
--endif. % ifdef EUNIT
