@@ -99,10 +99,18 @@ test_no(N, Tests) ->
 %%% Eunit setup stuff
 
 start_app() ->
-    application:start(crypto),
-    application:start(public_key),
-    ok = application:start(ssl),
-    ok = lhttpc:start().
+    {ok, _} = application:ensure_all_started(ssl),
+    ok = lhttpc:start(),
+    wait_for_dns(0),
+    ok.
+
+wait_for_dns (N) ->
+    case inet_res:resolve("localhost", in, a) of
+        {error, _} -> timer:sleep(10),
+                      wait_for_dns(N + 1);
+        _          -> %% io:format(user, "wait_for_dns: waited ~p\n", [ N ]),
+                      ok
+    end.
 
 stop_app(_) ->
     timer:sleep(1000),
@@ -334,7 +342,7 @@ simple_put() ->
 post() ->
     Port = start(gen_tcp, [fun copy_body/5]),
     URL = url(Port, "/post"),
-    {X, Y, Z} = now(),
+    {X, Y, Z} = os:timestamp(),
     Body = [
         "This is a rather simple post :)",
         integer_to_list(X),
@@ -350,7 +358,7 @@ post() ->
 post_100_continue() ->
     Port = start(gen_tcp, [fun copy_body_100_continue/5]),
     URL = url(Port, "/post_100_continue"),
-    {X, Y, Z} = now(),
+    {X, Y, Z} = os:timestamp(),
     Body = [
         "This is a rather simple post :)",
         integer_to_list(X),
