@@ -20,7 +20,7 @@ choose_addr(IPAddrs) when is_tuple(IPAddrs) ->
   case size(IPAddrs) of
     0    -> undefined;
     1    -> element(1, IPAddrs);
-    Size -> element(random:uniform(Size), IPAddrs)
+    Size -> element(rand:uniform(Size), IPAddrs)
   end;
 choose_addr(undefined) -> undefined.
 

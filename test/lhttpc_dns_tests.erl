@@ -38,7 +38,7 @@ test_lookup_uncached () ->
 -define(SINGLE, {4, 0, 0, 0}).
 
 test_lookup () ->
-  meck:new(lhttpc_dns, [ passthrough ]),
+  meck:new(lhttpc_dns, [ passthrough, no_passthrough_cover ]),
   meck:expect(lhttpc_dns, lookup_uncached,
               fun(Host) ->
                   %% io:format(standard_error, "host: ~p~n", [ Host ]),
@@ -58,8 +58,8 @@ test_lookup () ->
   meck:expect(lhttpc_dns, os_timestamp,
               fun () -> { 0, erlang:get(dns_ts), 0 } end),
 
-  meck:new(random, [ passthrough, unstick ]),
-  meck:expect(random, uniform, fun (N) -> erlang:get(dns_random) rem N + 1 end),
+  meck:new(rand, [ passthrough, unstick ]),
+  meck:expect(rand, uniform, fun (N) -> erlang:get(dns_random) rem N + 1 end),
 
   lhttpc_dns:reset_table(),
   erlang:put(dns_fail, false),
@@ -119,7 +119,7 @@ test_lookup () ->
   ?assertEqual(undefined, lhttpc_dns:lookup("noaddr.com")),
   ?assertEqual(2, meck:num_calls(lhttpc_dns, lookup_uncached, [ "noaddr.com" ])),
 
-  meck:unload(random),
+  meck:unload(rand),
   meck:unload(lhttpc_dns).
 
 -endif. % ifdef EUNIT
