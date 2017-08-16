@@ -339,7 +339,7 @@ request(URL, Method, Hdrs, Body, Timeout, Options) ->
     headers(), iolist(), pos_integer(), [option()]) -> result().
 request(Host, Port, Ssl, Path, Method, Hdrs, Body, Timeout, Options) ->
     verify_options(Options, []),
-    ReqId = now(),
+    ReqId = make_ref(),
     case proplists:is_defined(stream_to, Options) of
         true ->
             StreamTo = proplists:get_value(stream_to, Options),
