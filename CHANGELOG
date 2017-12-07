@@ -1,3 +1,10 @@
+Version 1.5.1:
+* Update specs to reflect that binary is allowed for request body in
+  addition to iodata.
+
+Version 1.5.0:
+* Changes to compile under Erlang 18.
+
 Version 1.4.0:
 * Add lhttpc_stats module.
 

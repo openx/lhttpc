@@ -127,7 +127,7 @@ recv(Socket, Length, false) ->
 
 %% @spec (Socket, Data, SslFlag) -> ok | {error, Reason}
 %%   Socket = socket()
-%%   Data = iolist()
+%%   Data = iodata()
 %%   SslFlag = boolean()
 %%   Reason = atom()
 %% @doc
@@ -135,7 +135,7 @@ recv(Socket, Length, false) ->
 %% Will use the `ssl' module if `SslFlag' is set to `true', otherwise the
 %% gen_tcp module.
 %% @end
--spec send(socket(), iolist() | binary(), boolean()) -> ok | {error, atom()}.
+-spec send(socket(), iodata(), boolean()) -> ok | {error, atom()}.
 send(Socket, Request, true) ->
     ssl:send(Socket, Request);
 send(Socket, Request, false) ->

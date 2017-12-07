@@ -62,7 +62,7 @@
     string:to_lower(lhttpc_lib:header_value("connection", HDRS, DEFAULT))).
 
 -spec request(term(), pid(), string(), 1..65535, true | false, string(),
-        string() | atom(), headers(), iolist(), [option()]) -> no_return().
+        string() | atom(), headers(), iodata(), [option()]) -> no_return().
 %% @spec (ReqId, From, Host, Port, Ssl, Path, Method, Hdrs, RequestBody, Options) -> ok
 %%    ReqId = term()
 %%    From = pid()
@@ -72,7 +72,7 @@
 %%    Method = atom() | string()
 %%    Hdrs = [Header]
 %%    Header = {string() | atom(), string()}
-%%    Body = iolist()
+%%    Body = iodata()
 %%    Options = [Option]
 %%    Option = {connect_timeout, Milliseconds}
 %% @end

@@ -144,15 +144,15 @@ split_port(Scheme, [P | T], Port) ->
     split_port(Scheme, T, [P | Port]).
 
 %% @spec (Path, Method, Headers, Host, Port, Body, PartialUpload) -> Request
-%% Path = iolist()
+%% Path = iodata()
 %% Method = atom() | string()
 %% Headers = [{atom() | string(), string()}]
 %% Host = string()
 %% Port = integer()
-%% Body = iolist()
+%% Body = iodata()
 %% PartialUpload = true | false
--spec format_request(iolist(), atom() | string(), headers(), string(),
-    integer(), iolist(), true | false ) -> {true | false, iolist()}.
+-spec format_request(iodata(), atom() | string(), headers(), string(),
+    integer(), iodata(), true | false ) -> {true | false, iolist()}.
 format_request(Path, Method, Hdrs, Host, Port, Body, PartialUpload) ->
     AllHdrs = add_mandatory_hdrs(Method, Hdrs, Host, Port, Body, PartialUpload),
     IsChunked = is_chunked(AllHdrs),
