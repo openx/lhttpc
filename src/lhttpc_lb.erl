@@ -139,6 +139,7 @@ handle_info({'DOWN', _Ref, process, Pid, Reason}, S=#state{clients=Tid}) ->
     %% Client died
     case Reason of
         normal      -> ok;
+        noproc      -> ok; %% A client made a request but died before we could start monitoring it.
         timeout     -> lhttpc_stats:record(close_connection_timeout, Pid);
         OtherReason -> io:format(standard_error, "DOWN ~p\n", [ OtherReason ])
     end,

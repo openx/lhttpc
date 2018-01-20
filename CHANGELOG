@@ -1,3 +1,6 @@
+Version 1.5.2:
+* Don't emit output when a client dies before we can monitor it.
+
 Version 1.5.1:
 * Update specs to reflect that binary is allowed for request body in
   addition to iodata.
