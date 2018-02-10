@@ -158,7 +158,8 @@ request(URL, Method, Hdrs, Body, Timeout) ->
 %%            {connect_options, [ConnectOptions]} |
 %%            {send_retry, integer()} |
 %%            {partial_upload, WindowSize} |
-%%            {partial_download, PartialDownloadOptions}
+%%            {partial_download, PartialDownloadOptions} |
+%%            {stream_to, StreamToPid}
 %%   Milliseconds = integer()
 %%   ConnectOptions = term()
 %%   WindowSize = integer() | infinity
@@ -166,12 +167,16 @@ request(URL, Method, Hdrs, Body, Timeout) ->
 %%   PartialDowloadOption = {window_size, WindowSize} |
 %%                          {part_size, PartSize}
 %%   PartSize = integer() | infinity
+%%   StreamToPid = pid()
 %%   Result = {ok, {{StatusCode, ReasonPhrase}, Hdrs, ResponseBody}} |
-%%            {ok, UploadState} | {error, Reason}
+%%            {ok, UploadState} | {error, Reason} |
+%%            {Id, ChildPid}
 %%   StatusCode = integer()
 %%   ReasonPhrase = string()
 %%   ResponseBody = binary()
 %%   Reason = connection_closed | connect_timeout | timeout
+%%   Id = reference()
+%%   ChildPid = pid()
 %% @doc Sends a request with a body.
 %% Would be the same as calling <pre>
 %% {Host, Port, Path, Ssl} = lhttpc_lib:parse_url(URL),
@@ -205,19 +210,24 @@ request(URL, Method, Hdrs, Body, Timeout, Options) ->
 %%            {connect_options, [ConnectOptions]} |
 %%            {send_retry, integer()} |
 %%            {partial_upload, WindowSize} |
-%%            {partial_download, PartialDownloadOptions}
+%%            {partial_download, PartialDownloadOptions} |
+%%            {stream_to, StreamToPid}
 %%   Milliseconds = integer()
 %%   WindowSize = integer()
 %%   PartialDownloadOptions = [PartialDownloadOption]
 %%   PartialDowloadOption = {window_size, WindowSize} |
 %%                          {part_size, PartSize}
 %%   PartSize = integer() | infinity
+%%   StreamToPid = pid()
 %%   Result = {ok, {{StatusCode, ReasonPhrase}, Hdrs, ResponseBody}}
 %%          | {error, Reason}
+%%          | {Id, ChildPid}
 %%   StatusCode = integer()
 %%   ReasonPhrase = string()
 %%   ResponseBody = binary() | pid() | undefined
 %%   Reason = connection_closed | connect_timeout | timeout
+%%   Id = reference()
+%%   ChildPid = pid()
 %% @doc Sends a request with a body.
 %%
 %% Instead of building and parsing URLs the target server is specified with
