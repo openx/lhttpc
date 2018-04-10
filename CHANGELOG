@@ -1,3 +1,6 @@
+Version 1.5.4
+* Remove ssl:seed/1 call, which was removed in OTP R14B.
+
 Version 1.5.3
 * lhttpc:request spec fixes for Erlang 19 dialyzer.
 

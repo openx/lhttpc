@@ -10,7 +10,7 @@ compile:
 doc:
 	$(REBAR) doc
 
-test:
+test: compile
 	$(REBAR) eunit
 
 dialyzer: compile
