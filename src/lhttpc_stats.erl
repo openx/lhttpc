@@ -29,10 +29,10 @@
 -record(conn_stats, {key :: conn_key(),
                      hps_key :: hps_key(),
                      request_count=0 :: integer(),
-                     open_time :: erlang:timestamp(),
-                     last_idle_time :: erlang:timestamp(),
+                     open_time :: erlang:timestamp() | undefined,
+                     last_idle_time :: erlang:timestamp() | undefined,
                      longest_idle_time_usec=0 :: integer()
-                   , pid :: pid()
+                   , pid :: pid() | undefined
                     }).
 -define(STATS_CONN_MATCH_PID(Pid),
         erlang:make_tuple(record_info(size, conn_stats),

@@ -46,8 +46,9 @@
 
 -include("lhttpc_types.hrl").
 
--type result() :: {ok, {{pos_integer(), string()}, headers(), binary()}} |
-    {error, atom()}.
+-type result() :: {ok, {{pos_integer(), string()}, headers(), binary() | pid()}} |
+                  {Id::reference(), ChildPid::pid()} |
+                  {error, atom()}.
 
 %% @hidden
 -spec start(normal | {takeover, node()} | {failover, node()}, any()) ->
@@ -385,7 +386,7 @@ request(Host, Port, Ssl, Path, Method, Hdrs, Body, Timeout, Options) ->
 %% Would be the same as calling
 %% `send_body_part(UploadState, BodyPart, infinity)'.
 %% @end
--spec send_body_part({pid(), window_size()}, iodata()) ->
+-spec send_body_part({pid(), window_size()}, iodata() | http_eob) ->
         {pid(), window_size()} | result().
 send_body_part({Pid, Window}, IoList) ->
     send_body_part({Pid, Window}, IoList, infinity).
@@ -411,7 +412,7 @@ send_body_part({Pid, Window}, IoList) ->
 %% there is no response within `Timeout' milliseconds, the request is
 %% canceled and `{error, timeout}' is returned.
 %% @end
--spec send_body_part({pid(), window_size()}, iodata(), timeout()) ->
+-spec send_body_part({pid(), window_size()}, iodata() | http_eob, timeout()) ->
         {ok, {pid(), window_size()}} | result().
 send_body_part({Pid, _Window}, http_eob, Timeout) when is_pid(Pid) ->
     Pid ! {body_part, self(), http_eob},
@@ -482,8 +483,7 @@ send_trailers({Pid, Window}, Trailers) ->
 %% `Timeout' milliseconds the request is canceled and `{error, timeout}' is
 %% returned.
 %% @end
--spec send_trailers({pid(), window_size()}, [{string() | string()}],
-        timeout()) -> result().
+-spec send_trailers({pid(), window_size()}, headers(), timeout()) -> result().
 send_trailers({Pid, _Window}, Trailers, Timeout)
         when is_list(Trailers), is_pid(Pid) ->
     Pid ! {trailers, self(), Trailers},

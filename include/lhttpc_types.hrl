@@ -37,7 +37,8 @@
         {send_retry, non_neg_integer()} |
         {stream_to, pid()} |
         {partial_upload, non_neg_integer() | infinity} |
-        {partial_download, pid(), non_neg_integer() | infinity}.
+        {partial_download, list({window_size, integer()} |
+                                {part_size, integer() | infinity})}.
 
 -type options() :: [option()].
 
