@@ -47,8 +47,8 @@ test_lookup () ->
                       end
                   end
               end),
-  meck:expect(lhttpc_dns, os_timestamp,
-              fun () -> { 0, erlang:get(dns_ts), 0 } end),
+  meck:expect(lhttpc_dns, monotonic_time,
+              fun () -> erlang:convert_time_unit(erlang:get(dns_ts), seconds, native) end),
 
   meck:new(rand, [ passthrough, unstick ]),
   meck:expect(rand, uniform, fun (N) -> erlang:get(dns_random) rem N + 1 end),

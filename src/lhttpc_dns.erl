@@ -7,7 +7,7 @@
         , reset_table/0
         , lookup/1
         , lookup_uncached/1
-        , os_timestamp/0
+        , monotonic_time/0
         ]).
 
 
@@ -25,9 +25,9 @@ choose_addr(IPAddrs) when is_tuple(IPAddrs) ->
 choose_addr(undefined) -> undefined.
 
 
-os_timestamp() ->
-  %% We wrap os:timestamp so that the unit tests can mock it.
-  os:timestamp().
+monotonic_time() ->
+  %% We wrap erlang:monotonic_time so that the unit tests can mock it.
+  erlang:monotonic_time().
 
 
 -define(ERROR_CACHE_SECONDS, 1).
@@ -39,7 +39,7 @@ os_timestamp() ->
 -type lhttpc_dns_counts() :: { SuccessCount :: non_neg_integer()
                              , FailureCount :: non_neg_integer()
                              , FailuresSinceLastSuccessCount :: non_neg_integer()
-                             , SuccessTime :: erlang:timestamp() | 'undefined' }.
+                             , SuccessTime :: integer() | 'undefined' }.
 
 -spec lookup(Host::string()) -> tuple() | 'undefined' | string().
 lookup (Host) ->
@@ -54,9 +54,9 @@ lookup (Host) ->
   {WantRefresh, CachedIPAddrs, Now, CachedCounts} =
     try ets:lookup(?MODULE, Host) of
       [] ->                                             % Not in cache.
-        {true, undefined, lhttpc_dns:os_timestamp(), undefined};
+        {true, undefined, lhttpc_dns:monotonic_time(), undefined};
       [{_, IPAddrs0, Expiration, CachedCounts0}] ->     % Cached, maybe stale.
-        Now0 = lhttpc_dns:os_timestamp(),
+        Now0 = lhttpc_dns:monotonic_time(),
         {Now0 >= Expiration, IPAddrs0, Now0, CachedCounts0}
     catch
       error:badarg ->
@@ -85,7 +85,7 @@ lookup (Host) ->
           SuccessLookup ->
             {SuccessLookup, count_success(CachedCounts, Now)}
         end,
-      ets_insert_bounded(?MODULE, {Host, IPAddrs, timestamp_add_seconds(Now, TTL), Counts}),
+      ets_insert_bounded(?MODULE, {Host, IPAddrs, Now + erlang:convert_time_unit(TTL, seconds, native), Counts}),
       choose_addr(IPAddrs)
   end.
 
@@ -143,16 +143,6 @@ ets_insert_bounded(Tab, Entry) ->
   ets:insert(Tab, Entry).
 
 
--define(TEN_E6, 1000000).
-timestamp_add_seconds ({MegaSeconds, Seconds, MicroSeconds}, AddSeconds) ->
-  S1 = Seconds + AddSeconds,
-  if S1 >= ?TEN_E6 ->
-      {MegaSeconds + (S1 div ?TEN_E6), S1 rem ?TEN_E6, MicroSeconds};
-     true ->
-      {MegaSeconds, S1, MicroSeconds}
-  end.
-
-
 -spec min_cache_seconds() -> MinCacheSeconds::non_neg_integer().
 min_cache_seconds() ->
   case application:get_env(lhttpc, dns_cache_min_cache_seconds) of
@@ -161,7 +151,7 @@ min_cache_seconds() ->
   end.
 
 
--spec count_success(Counts::lhttpc_dns_counts()|'undefined', Now::erlang:timestamp()) -> lhttpc_dns_counts().
+-spec count_success(Counts::lhttpc_dns_counts()|'undefined', Now::integer()) -> lhttpc_dns_counts().
 count_success({SuccessCount, FailureCount, _FailuresSinceLastSuccessCount, _LastSuccessTime}, Now) ->
   {SuccessCount + 1, FailureCount, 0, Now};
 count_success(undefined, Now) ->

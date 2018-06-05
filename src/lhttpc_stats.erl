@@ -15,7 +15,7 @@
 -type conn_key() :: lhttpc_lb:socket().
 
 -record(start_time, {key = start_time :: 'start_time',
-                     start_time = os:timestamp() :: erlang:timestamp()}).
+                     start_time = erlang:monotonic_time() :: integer()}).
 
 %% Per-host/port/ssl stats.
 -record(hps_stats, {key :: hps_key(),
@@ -29,8 +29,8 @@
 -record(conn_stats, {key :: conn_key(),
                      hps_key :: hps_key(),
                      request_count=0 :: integer(),
-                     open_time :: erlang:timestamp() | undefined,
-                     last_idle_time :: erlang:timestamp() | undefined,
+                     open_time :: integer() | undefined,
+                     last_idle_time :: integer() | undefined,
                      longest_idle_time_usec=0 :: integer()
                    , pid :: pid() | undefined
                     }).
@@ -69,7 +69,7 @@ record(open_connection, {HPSKey, Socket}) ->
                 error:badarg ->
                     ets:insert_new(?MODULE, #hps_stats{key=HPSKey, connection_count=1})
             end,
-            ets:insert_new(?MODULE, #conn_stats{key=Socket, hps_key=HPSKey, open_time=os:timestamp()}),
+            ets:insert_new(?MODULE, #conn_stats{key=Socket, hps_key=HPSKey, open_time=erlang:monotonic_time()}),
             ok;
         false -> ok
     end;
@@ -81,7 +81,7 @@ record(close_connection_remote, Socket) ->
                 [#conn_stats{open_time=undefined}] ->
                     throw(bad_open_time); % shouldn't happen
                 [#conn_stats{hps_key=HPSKey, open_time=OpenTime}] ->
-                    Lifetime = timer:now_diff(os:timestamp(), OpenTime),
+                    Lifetime = erlang:convert_time_unit(erlang:monotonic_time() - OpenTime, native, micro_seconds),
                     ets:update_counter(?MODULE, HPSKey, [ {#hps_stats.connection_remote_close_count, 1},
                                                           {#hps_stats.connection_cumulative_lifetime_usec, Lifetime} ]),
                     ets:delete(?MODULE, Socket),
@@ -100,7 +100,7 @@ record(close_connection_local, Socket) ->
                 [#conn_stats{open_time=undefined}] ->
                     throw(bad_open_time); % shouldn't happen
                 [#conn_stats{hps_key=HPSKey, open_time=OpenTime}] ->
-                    Lifetime = timer:now_diff(os:timestamp(), OpenTime),
+                    Lifetime = erlang:convert_time_unit(erlang:monotonic_time() - OpenTime, native, micro_seconds),
                     ets:update_counter(?MODULE, HPSKey, [ {#hps_stats.connection_local_close_count, 1},
                                                           {#hps_stats.connection_cumulative_lifetime_usec, Lifetime} ]),
                     ets:delete(?MODULE, Socket),
@@ -122,7 +122,7 @@ record(close_connection_timeout, Pid) ->
                         [#conn_stats{open_time=undefined}] ->
                             throw(bad_open_time); % shouldn't happen
                         [#conn_stats{hps_key=HPSKey, open_time=OpenTime}] ->
-                            Lifetime = timer:now_diff(os:timestamp(), OpenTime),
+                            Lifetime = erlang:convert_time_unit(erlang:monotonic_time() - OpenTime, native, micro_seconds),
                             ets:update_counter(?MODULE, HPSKey, [ {#hps_stats.connection_local_close_count, 1},
                                                                   {#hps_stats.connection_cumulative_lifetime_usec, Lifetime} ]),
                             ets:delete(?MODULE, Socket),
@@ -146,8 +146,8 @@ record(start_request, {HPSKey, Socket, Pid}) ->
                 [#conn_stats{last_idle_time=LastIdleTime, longest_idle_time_usec=LongestIdleTime}] ->
                     UpdateStats0 = [ {#conn_stats.request_count, 1} ],
                     UpdateStats1 = case LastIdleTime of
-                                       TS when is_tuple(TS) ->
-                                           CurrentIdleTime = timer:now_diff(os:timestamp(), TS),
+                                       TS when is_integer(TS) ->
+                                           CurrentIdleTime = erlang:convert_time_unit(erlang:monotonic_time() - TS, native, micro_seconds),
                                            NewLongestIdleTime = max(LongestIdleTime, CurrentIdleTime),
                                            %% There is a race here, but what can you do?
                                            [ {#conn_stats.longest_idle_time_usec, 1, 0, NewLongestIdleTime} | UpdateStats0 ];
@@ -159,7 +159,7 @@ record(start_request, {HPSKey, Socket, Pid}) ->
                 [] ->
                     %% First request for socket.
                     %% This shouldn't happen. @@
-                    %% ets:insert_new(?MODULE, #conn_stats{key=Socket, open_time=os:timestamp(), request_count=1, pid=Pid})
+                    %% ets:insert_new(?MODULE, #conn_stats{key=Socket, open_time=erlang:monotonic_time(), request_count=1, pid=Pid})
                     throw(missing_open_connection)
                 end;
         false -> ok
@@ -168,7 +168,7 @@ record(start_request, {HPSKey, Socket, Pid}) ->
 record(end_request, Socket) ->
     case stats_enabled() of
         true ->
-            ets:update_element(?MODULE, Socket, {#conn_stats.last_idle_time, os:timestamp()}),
+            ets:update_element(?MODULE, Socket, {#conn_stats.last_idle_time, erlang:monotonic_time()}),
             ok;
         false -> ok
     end.
@@ -178,7 +178,7 @@ print() ->
     case stats_enabled() of
         true ->
             [ #start_time{start_time=StartTime} ] = ets:lookup(?MODULE, start_time),
-            ServiceLifetime = timer:now_diff(os:timestamp(), StartTime),
+            ServiceLifetime = erlang:convert_time_unit(erlang:monotonic_time() - StartTime, native, micro_seconds),
 
             io:format("                                                                 Remote     Local          Avg\n"
                       "Host                                       Requests   Sockets     Close     Close Ac Id   Conn\n"
@@ -210,7 +210,7 @@ print() ->
 
 init(KeepStats) ->
     if KeepStats -> ets:new(?MODULE, [ named_table, set, public, {keypos, ?STATS_KEYPOS}, {write_concurrency, true} ]),
-                    ets:insert_new(?MODULE, #start_time{start_time = os:timestamp()});
+                    ets:insert_new(?MODULE, #start_time{start_time = erlang:monotonic_time()});
        true      -> ok
     end,
     {ok, #lhttpc_stats_state{stats_enabled=KeepStats}}.
