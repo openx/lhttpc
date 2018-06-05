@@ -1,4 +1,4 @@
-REBAR := ./rebar
+REBAR := rebar3
 
 .PHONY: all doc clean test dialyzer
 
@@ -8,16 +8,14 @@ compile:
 	$(REBAR) compile
 
 doc:
-	$(REBAR) doc
+	$(REBAR) edoc
 
-test: compile
-	$(REBAR) eunit
-
-dialyzer: compile
-	$(REBAR) analyze
+test:
+	$(REBAR) as test do xref,dialyzer,eunit,cover
 
 release: all dialyzer test
 	$(REBAR) release
 
 clean:
 	$(REBAR) clean
+	rm -rf _build
