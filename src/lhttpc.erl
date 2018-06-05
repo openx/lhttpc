@@ -337,6 +337,14 @@ request(URL, Method, Hdrs, Body, Timeout, Options) ->
 %% lhttpc will never close the connection itself; it will only be
 %% closed by the other end or the TCP keepalive mechanism.
 %%
+%% `{request_limit, N}' is a connection pool parameter that specifies the
+%% maximum number of requests that will be made over a socket before it is
+%% closed.  The default value is `infinity'.
+%%
+%% `{connection_lifetime, Milliseconds}' is a connection pool parameter that
+%% specifies the maximum lifetime of the socket.  The default value is
+%% `infinity'.
+%%
 %% @end
 -spec request(string(), 1..65535, true | false, string(), atom() | string(),
     headers(), iodata(), pos_integer(), [option()]) -> result().
@@ -579,6 +587,16 @@ verify_options([{connection_timeout, MS} | Options], Errors)
     verify_options(Options, Errors);
 verify_options([{max_connections, N} | Options], Errors)
         when is_integer(N), N > 0 ->
+    verify_options(Options, Errors);
+verify_options([{request_limit, infinity} | Options], Errors) ->
+    verify_options(Options, Errors);
+verify_options([{request_limit, N} | Options], Errors)
+        when is_integer(N), N > 0 ->
+    verify_options(Options, Errors);
+verify_options([{connection_lifetime, infinity} | Options], Errors) ->
+    verify_options(Options, Errors);
+verify_options([{connection_lifetime, MS} | Options], Errors)
+        when is_integer(MS), MS > 0 ->
     verify_options(Options, Errors);
 verify_options([{partial_upload, WindowSize} | Options], Errors)
         when is_integer(WindowSize), WindowSize >= 0 ->

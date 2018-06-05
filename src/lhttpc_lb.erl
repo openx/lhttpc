@@ -4,7 +4,7 @@
 %%% connection attempts from clients.
 -module(lhttpc_lb).
 -behaviour(gen_server).
--export([start_link/1, checkout/5, checkin/4, connection_count/3, connection_count/1]).
+-export([start_link/1, checkout/7, checkin/4, connection_count/3, connection_count/1]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          code_change/3, terminate/2]).
 
@@ -17,12 +17,24 @@
          port :: port_number(),
          ssl :: boolean(),
          max_conn :: max_connections(),
-         timeout :: timeout()}).
+         timeout :: timeout(),
+         request_limit :: request_limit(),
+         conn_lifetime :: connection_lifetime()}).
+
+-record(conn_info,
+        {request_count = 0 :: non_neg_integer(),
+         expire :: integer() | undefined}).
+
+-record(conn_free,
+        {socket :: socket(),
+         timer_ref :: reference(),
+         conn_info :: conn_info()}).
 
 -record(state,
         {config :: config(),
          clients :: ets:tid(),
-         free=[] :: list()}).
+         free=[] :: list(conn_free())}).
+
 
 -export_types([host/0, port_number/0, socket/0, max_connections/0, request_limit/0, connection_lifetime/0, connection_timeout/0]).
 -type config() :: #config{}.
@@ -30,7 +42,11 @@
 -type port_number() :: 1..65535.
 -type socket() :: gen_tcp:socket() | ssl:sslsocket().
 -type max_connections() :: pos_integer().
+-type request_limit() :: pos_integer() | 'infinity'.
+-type connection_lifetime() :: pos_integer() | 'infinity'.
 -type connection_timeout() :: timeout().
+-type conn_info() :: #conn_info{}.
+-type conn_free() :: #conn_free{}.
 
 
 -spec start_link(config()) -> {ok, pid()}.
@@ -38,11 +54,13 @@ start_link(Config) ->
     gen_server:start_link(?MODULE, Config, []).
 
 -spec checkout(host(), port_number(), SSL::boolean(),
-               max_connections(), connection_timeout()) ->
+               max_connections(), connection_timeout(),
+               request_limit(), connection_lifetime()) ->
         {ok, socket()} | retry_later | no_socket.
-checkout(Host, Port, Ssl, MaxConn, ConnTimeout) ->
+checkout(Host, Port, Ssl, MaxConn, ConnTimeout, RequestLimit, ConnLifetime) ->
     Config = #config{host = Host, port = Port, ssl = Ssl,
-                     max_conn = MaxConn, timeout = ConnTimeout},
+                     max_conn = MaxConn, timeout = ConnTimeout,
+                     request_limit = RequestLimit, conn_lifetime = ConnLifetime},
     Lb = find_or_start_lb(Config),
     gen_server:call(Lb, {checkout, self()}, infinity).
 
@@ -97,17 +115,23 @@ handle_call({checkout,Pid}, _From, S = #state{free=[], clients=Tid, config=Confi
     case Config#config.max_conn > Size of
         true ->
             %% We don't have an open socket, but the client can open one.
-            add_client(Tid, Pid),
+            Expire =
+                case Config#config.conn_lifetime of
+                    infinity     -> undefined;
+                    ConnLifetime -> erlang:monotonic_time() + erlang:convert_time_unit(ConnLifetime, milli_seconds, native)
+                end,
+            add_client(Tid, Pid, #conn_info{request_count = 1, expire = Expire}),
             {reply, no_socket, S};
         false ->
             {reply, retry_later, S}
     end;
-handle_call({checkout,Pid}, _From, S = #state{free=[{Taken,Timer}|Free], clients=Tid, config=#config{ssl=Ssl}}) ->
+handle_call({checkout,Pid}, _From,
+            S=#state{free=[#conn_free{socket=Taken, timer_ref=Timer, conn_info=ConnInfo} | Free], clients=Tid, config=#config{ssl=Ssl}}) ->
     lhttpc_sock:setopts(Taken, [{active,false}], Ssl),
     case lhttpc_sock:controlling_process(Taken, Pid, Ssl) of
         ok ->
             cancel_timer(Timer, Taken),
-            add_client(Tid,Pid),
+            add_client(Tid, Pid, ConnInfo#conn_info{request_count = ConnInfo#conn_info.request_count + 1}),
             {reply, {ok, Taken}, S#state{free=Free}};
         {error, badarg} ->
             %% The caller died.
@@ -123,16 +147,22 @@ handle_call({connection_count}, _From, S = #state{free=Free, clients=Tid}) ->
 handle_call(_Msg, _From, S) ->
     {noreply, S}.
 
-handle_cast({checkin, Pid, Socket}, S = #state{config=#config{ssl=Ssl, timeout=T}, clients=Tid, free=Free}) ->
+handle_cast({checkin, Pid, Socket}, S = #state{config=Config=#config{ssl=Ssl, timeout=T}, clients=Tid, free=Free}) ->
     lhttpc_stats:record(end_request, Socket),
-    remove_client(Tid, Pid),
-    %% the client cast function took care of giving us ownership
-    case lhttpc_sock:setopts(Socket, [{active, once}], Ssl) of
-        ok ->
+    ConnInfo = remove_client(Tid, Pid),
+    case
+        ConnInfo =:= undefined orelse
+        request_limit_reached(ConnInfo, Config) orelse
+        expire_time_reached(ConnInfo) orelse
+        %% the client cast function took care of giving us ownership
+        %% Set {active, once} so that we will get a message if the remote closes the socket.
+        lhttpc_sock:setopts(Socket, [{active, once}], Ssl) =/= ok % socket closed or failed
+    of
+        true ->
+            noreply_maybe_shutdown(remove_socket(Socket, S));
+        false ->
             Timer = start_timer(Socket,T),
-            {noreply, S#state{free=[{Socket,Timer}|Free]}};
-        {error, _E} -> % socket closed or failed
-            noreply_maybe_shutdown(S)
+            {noreply, S#state{free=[#conn_free{socket = Socket, timer_ref = Timer, conn_info = ConnInfo} | Free]}}
     end;
 handle_cast(_Msg, State) ->
     {noreply, State}.
@@ -172,7 +202,7 @@ code_change(_OldVsn, State, _Extra) ->
 terminate(_Reason, #state{config=#config{host=H, port=P, ssl=Ssl}, free=Free, clients=Tid}) ->
     ets:delete(Tid),
     ets:delete(?MODULE,{H,P,Ssl}),
-    lists:foreach(fun ({Socket, _TimerRef}) ->
+    lists:foreach(fun (#conn_free{socket=Socket}) ->
                           lhttpc_stats:record(close_connection_local, Socket),
                           lhttpc_sock:close(Socket,Ssl)
                   end, Free),
@@ -218,18 +248,20 @@ find_lb(Name={_Host,_Port,_Ssl}) ->
             end
     end.
 
--spec add_client(ets:tid(), pid()) -> true.
-add_client(Tid, Pid) ->
+-spec add_client(ets:tid(), pid(), conn_info()) -> ok.
+add_client(Tid, Pid, ConnInfo) ->
     Ref = erlang:monitor(process, Pid),
-    ets:insert(Tid, {Pid, Ref}).
+    ets:insert(Tid, {Pid, Ref, ConnInfo}),
+    ok.
 
--spec remove_client(ets:tid(), pid()) -> true.
+-spec remove_client(ets:tid(), pid()) -> conn_info() | undefined.
 remove_client(Tid, Pid) ->
     case ets:lookup(Tid, Pid) of
-        [] -> ok; % client already removed
-        [{_Pid, Ref}] ->
+        [] -> undefined; % client already removed
+        [{_Pid, Ref, ConnInfo}] ->
             erlang:demonitor(Ref, [flush]),
-            ets:delete(Tid, Pid)
+            ets:delete(Tid, Pid),
+            ConnInfo
     end.
 
 -spec remove_socket(socket(), #state{}) -> #state{}.
@@ -238,9 +270,9 @@ remove_socket(Socket, S = #state{config=#config{ssl=Ssl}, free=Free}) ->
     lhttpc_sock:close(Socket, Ssl),
     S#state{free=drop_and_cancel(Socket,Free)}.
 
--spec drop_and_cancel(socket(), [{socket(), reference()}]) -> [{socket(), reference()}].
+-spec drop_and_cancel(socket(), list(conn_free())) -> list(conn_free()).
 drop_and_cancel(_, []) -> [];
-drop_and_cancel(Socket, [{Socket, TimerRef} | Rest]) ->
+drop_and_cancel(Socket, [#conn_free{socket=Socket, timer_ref=TimerRef} | Rest]) ->
     cancel_timer(TimerRef, Socket),
     Rest;
 drop_and_cancel(Socket, [H|T]) ->
@@ -261,6 +293,17 @@ cancel_timer(TimerRef, Socket) ->
 start_timer(_, infinity) -> make_ref(); % dummy timer
 start_timer(Socket, Timeout) ->
     erlang:send_after(Timeout, self(), {timeout,Socket}).
+
+request_limit_reached(_, #config{request_limit=infinity}) ->
+    false;
+request_limit_reached(#conn_info{request_count=RequestCount}, #config{request_limit=RequestLimit})
+  when is_integer(RequestLimit) ->
+    RequestCount >= RequestLimit.
+
+expire_time_reached(#conn_info{expire=undefined}) ->
+    false;
+expire_time_reached(#conn_info{expire=Expire}) when is_integer(Expire) ->
+    erlang:monotonic_time() > Expire.
 
 noreply_maybe_shutdown(S=#state{clients=Tid, free=Free}) ->
     case Free =:= [] andalso ets:info(Tid, size) =:= 0 of

@@ -33,6 +33,8 @@
         {connect_options, list()} |
         {connect_timeout, timeout()} |
         {connection_timeout, non_neg_integer() | infinity} |
+        {connection_lifetime, non_neg_integer() | infinity} |
+        {request_limit, non_neg_integer() | infinity} |
         {max_connections, non_neg_integer()} |
         {send_retry, non_neg_integer()} |
         {stream_to, pid()} |

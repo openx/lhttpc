@@ -104,9 +104,11 @@ execute(ReqId, From, Host, Port, Ssl, Path, Method, Hdrs, Body, Options) ->
     NormalizedMethod = lhttpc_lib:normalize_method(Method),
     MaxConnections = proplists:get_value(max_connections, Options, 10),
     ConnectionTimeout = proplists:get_value(connection_timeout, Options, infinity),
+    RequestLimit = proplists:get_value(request_limit, Options, infinity),
+    ConnectionLifetime = proplists:get_value(connection_lifetime, Options, infinity),
     {ChunkedUpload, Request} = lhttpc_lib:format_request(Path, NormalizedMethod,
         Hdrs, Host, Port, Body, PartialUpload),
-    Socket = case lhttpc_lb:checkout(Host, Port, Ssl, MaxConnections, ConnectionTimeout) of
+    Socket = case lhttpc_lb:checkout(Host, Port, Ssl, MaxConnections, ConnectionTimeout, RequestLimit, ConnectionLifetime) of
         {ok, S}   -> S; % Re-using HTTP/1.1 connections
         retry_later -> throw(retry_later);
         no_socket -> undefined % Opening a new HTTP/1.1 connection

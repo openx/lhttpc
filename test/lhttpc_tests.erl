@@ -147,6 +147,8 @@ tcp_test_() ->
                 ?_test(persistent_connection()),
                 ?_test(request_timeout()),
                 ?_test(connection_timeout()),
+                ?_test(request_limit()),
+                ?_test(connection_lifetime()),
                 %% ?_test(suspended_manager()),
                 ?_test(chunked_encoding()),
                 ?_test(partial_upload_identity()),
@@ -405,6 +407,30 @@ connection_timeout() ->
     ?assertEqual({200, "OK"}, status(Response)),
     ?assertEqual(<<?DEFAULT_STRING>>, body(Response)),
     timer:sleep(100),
+    ?assertEqual({0,0}, lhttpc_lb:connection_count("localhost", Port, false)).
+
+request_limit() ->
+    RequestLimit = 3,
+    Port = start(gen_tcp, lists:duplicate(RequestLimit, fun simple_response/5)),
+    URL = url(Port, "/request_limit"),
+    lists:foreach(
+      fun (_) ->
+              {ok, _Response} = lhttpc:request(URL, get, [], [], 100, [ {request_limit, RequestLimit} ]),
+              ?assertEqual({0,1}, lhttpc_lb:connection_count("localhost", Port, false))
+      end, lists:seq(1, RequestLimit - 1)),
+    {ok, _ResponseN} = lhttpc:request(URL, get, [], [], 100, [ {request_limit, RequestLimit} ]),
+    ?assertEqual({0,0}, lhttpc_lb:connection_count("localhost", Port, false)).
+
+connection_lifetime() ->
+    ConnectionLifetime = 20,
+    Port = start(gen_tcp, lists:duplicate(4, fun simple_response/5)),
+    URL = url(Port, "/connection_lifetime"),
+    {ok, _Response0} = lhttpc:request(URL, get, [], [], 100, [ {connection_lifetime, ConnectionLifetime} ]),
+    ?assertEqual({0,1}, lhttpc_lb:connection_count("localhost", Port, false)),
+    {ok, _Response1} = lhttpc:request(URL, get, [], [], 100, [ {connection_lifetime, ConnectionLifetime} ]),
+    ?assertEqual({0,1}, lhttpc_lb:connection_count("localhost", Port, false)),
+    timer:sleep(ConnectionLifetime + 10),
+    {ok, _Response2} = lhttpc:request(URL, get, [], [], 100, [ {connection_lifetime, ConnectionLifetime} ]),
     ?assertEqual({0,0}, lhttpc_lb:connection_count("localhost", Port, false)).
 
 %% suspended_manager() ->
