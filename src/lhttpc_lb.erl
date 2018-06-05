@@ -4,7 +4,7 @@
 %%% connection attempts from clients.
 -module(lhttpc_lb).
 -behaviour(gen_server).
--export([start_link/5, checkout/5, checkin/4, connection_count/3, connection_count/1]).
+-export([start_link/1, checkout/5, checkin/4, connection_count/3, connection_count/1]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          code_change/3, terminate/2]).
 
@@ -12,15 +12,20 @@
 
 %% TODO: transfert_socket, in case of checkout+give_away
 
--record(state, {host :: host(),
-                port :: port_number(),
-                ssl :: boolean(),
-                max_conn :: max_connections(),
-                timeout :: timeout(),
-                clients :: ets:tid(),
-                free=[] :: list()}).
+-record(config,
+        {host :: host(),
+         port :: port_number(),
+         ssl :: boolean(),
+         max_conn :: max_connections(),
+         timeout :: timeout()}).
 
--export_types([host/0, port_number/0, socket/0, max_connections/0, connection_timeout/0]).
+-record(state,
+        {config :: config(),
+         clients :: ets:tid(),
+         free=[] :: list()}).
+
+-export_types([host/0, port_number/0, socket/0, max_connections/0, request_limit/0, connection_lifetime/0, connection_timeout/0]).
+-type config() :: #config{}.
 -type host() :: inet:ip_address()|string().
 -type port_number() :: 1..65535.
 -type socket() :: gen_tcp:socket() | ssl:sslsocket().
@@ -28,16 +33,17 @@
 -type connection_timeout() :: timeout().
 
 
--spec start_link(host(), port_number(), SSL::boolean(),
-                 max_connections(), connection_timeout()) -> {ok, pid()}.
-start_link(Host, Port, Ssl, MaxConn, ConnTimeout) ->
-    gen_server:start_link(?MODULE, {Host, Port, Ssl, MaxConn, ConnTimeout}, []).
+-spec start_link(config()) -> {ok, pid()}.
+start_link(Config) ->
+    gen_server:start_link(?MODULE, Config, []).
 
 -spec checkout(host(), port_number(), SSL::boolean(),
                max_connections(), connection_timeout()) ->
         {ok, socket()} | retry_later | no_socket.
 checkout(Host, Port, Ssl, MaxConn, ConnTimeout) ->
-    Lb = find_lb({Host,Port,Ssl}, {MaxConn, ConnTimeout}),
+    Config = #config{host = Host, port = Port, ssl = Ssl,
+                     max_conn = MaxConn, timeout = ConnTimeout},
+    Lb = find_or_start_lb(Config),
     gen_server:call(Lb, {checkout, self()}, infinity).
 
 %% Called when we're done and the socket can still be reused
@@ -75,24 +81,20 @@ connection_count(Name) ->
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%% GEN_SERVER CALLBACKS %%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%
-init({Host,Port,Ssl,MaxConn,ConnTimeout}) ->
+init(Config=#config{host=Host, port=Port, ssl=Ssl}) ->
     %% we must use insert_new because it is possible a concurrent request is
     %% starting such a server at exactly the same time.
     case ets:insert_new(?MODULE, {{Host,Port,Ssl}, self()}) of
         true ->
-            {ok, #state{host=Host,
-                        port=Port,
-                        ssl=Ssl,
-                        max_conn=MaxConn,
-                        timeout=ConnTimeout,
+            {ok, #state{config=Config,
                         clients=ets:new(clients, [set, private])}};
         false ->
             ignore
     end.
 
-handle_call({checkout,Pid}, _From, S = #state{free=[], max_conn=Max, clients=Tid}) ->
+handle_call({checkout,Pid}, _From, S = #state{free=[], clients=Tid, config=Config}) ->
     Size = ets:info(Tid, size),
-    case Max > Size of
+    case Config#config.max_conn > Size of
         true ->
             %% We don't have an open socket, but the client can open one.
             add_client(Tid, Pid),
@@ -100,7 +102,7 @@ handle_call({checkout,Pid}, _From, S = #state{free=[], max_conn=Max, clients=Tid
         false ->
             {reply, retry_later, S}
     end;
-handle_call({checkout,Pid}, _From, S = #state{free=[{Taken,Timer}|Free], clients=Tid, ssl=Ssl}) ->
+handle_call({checkout,Pid}, _From, S = #state{free=[{Taken,Timer}|Free], clients=Tid, config=#config{ssl=Ssl}}) ->
     lhttpc_sock:setopts(Taken, [{active,false}], Ssl),
     case lhttpc_sock:controlling_process(Taken, Pid, Ssl) of
         ok ->
@@ -121,7 +123,7 @@ handle_call({connection_count}, _From, S = #state{free=Free, clients=Tid}) ->
 handle_call(_Msg, _From, S) ->
     {noreply, S}.
 
-handle_cast({checkin, Pid, Socket}, S = #state{ssl=Ssl, clients=Tid, free=Free, timeout=T}) ->
+handle_cast({checkin, Pid, Socket}, S = #state{config=#config{ssl=Ssl, timeout=T}, clients=Tid, free=Free}) ->
     lhttpc_stats:record(end_request, Socket),
     remove_client(Tid, Pid),
     %% the client cast function took care of giving us ownership
@@ -167,7 +169,7 @@ handle_info(_Info, State) ->
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
-terminate(_Reason, #state{host=H, port=P, ssl=Ssl, free=Free, clients=Tid}) ->
+terminate(_Reason, #state{config=#config{host=H, port=P, ssl=Ssl}, free=Free, clients=Tid}) ->
     ets:delete(Tid),
     ets:delete(?MODULE,{H,P,Ssl}),
     lists:foreach(fun ({Socket, _TimerRef}) ->
@@ -183,12 +185,13 @@ terminate(_Reason, #state{host=H, port=P, ssl=Ssl, free=Free, clients=Tid}) ->
 %% Potential race condition: if the lb shuts itself down after a while, it
 %% might happen between a read and the use of the pid. A busy load balancer
 %% should not have this problem.
--spec find_lb(Name::{host(),port_number(),boolean()}, {max_connections(), connection_timeout()}) -> pid().
-find_lb(Name = {Host,Port,Ssl}, Args={MaxConn, ConnTimeout}) ->
+-spec find_or_start_lb(config()) -> pid().
+find_or_start_lb(Config=#config{host=Host, port=Port, ssl=Ssl}) ->
+    Name = {Host, Port, Ssl},
     case ets:lookup(?MODULE, Name) of
         [] ->
-            case supervisor:start_child(lhttpc_lb_sup, [Host,Port,Ssl,MaxConn,ConnTimeout]) of
-                {ok, undefined} -> find_lb(Name,Args);
+            case supervisor:start_child(lhttpc_lb_sup, [ Config ]) of
+                {ok, undefined} -> find_or_start_lb(Config);
                 {ok, Pid} -> Pid
             end;
         [{_Name, Pid}] ->
@@ -196,7 +199,7 @@ find_lb(Name = {Host,Port,Ssl}, Args={MaxConn, ConnTimeout}) ->
                 true -> Pid;
                 false ->
                     ets:delete(?MODULE, Name),
-                    find_lb(Name,Args)
+                    find_or_start_lb(Config)
             end
     end.
 
@@ -230,7 +233,7 @@ remove_client(Tid, Pid) ->
     end.
 
 -spec remove_socket(socket(), #state{}) -> #state{}.
-remove_socket(Socket, S = #state{ssl=Ssl, free=Free}) ->
+remove_socket(Socket, S = #state{config=#config{ssl=Ssl}, free=Free}) ->
     lhttpc_stats:record(close_connection_local, Socket),
     lhttpc_sock:close(Socket, Ssl),
     S#state{free=drop_and_cancel(Socket,Free)}.
