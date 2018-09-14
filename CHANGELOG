@@ -1,3 +1,6 @@
+Version 1.7.0
+* Optimize header handling.
+
 Version 1.6.0
 * Add request_limit and connection_lifetime options to lhttpc:request.
 * Small fixes to lhttpc specs.

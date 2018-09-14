@@ -58,9 +58,6 @@
         %% the wire at that point or in case of chunked one chunk
     }).
 
--define(CONNECTION_HDR(HDRS, DEFAULT),
-    string:to_lower(lhttpc_lib:header_value("connection", HDRS, DEFAULT))).
-
 -spec request(term(), pid(), string(), 1..65535, true | false, string(),
         string() | atom(), headers(), iodata(), [option()]) -> no_return().
 %% @spec (ReqId, From, Host, Port, Ssl, Path, Method, Hdrs, RequestBody, Options) -> ok
@@ -348,12 +345,13 @@ body_type(Hdrs) ->
     %   closed (AFAIK, this was common in versions before 1.1).
     case lhttpc_lib:header_value("content-length", Hdrs) of
         undefined ->
-            TransferEncoding = string:to_lower(
-                lhttpc_lib:header_value("transfer-encoding", Hdrs, "undefined")
-            ),
-            case TransferEncoding of
-                "chunked" -> chunked;
-                _         -> infinite
+            case lhttpc_lib:header_value("transfer-encoding", Hdrs) of
+                undefined    -> infinite;
+                TransferEncoding ->
+                    case lhttpc_lib:string_lower_equal("chunked", TransferEncoding) of
+                        true -> chunked;
+                        _    -> infinite
+                    end
             end;
         ContentLength ->
             {fixed_length, list_to_integer(ContentLength)}
@@ -612,15 +610,15 @@ read_infinite_body_part(#client_state{socket = Socket, ssl = Ssl}) ->
 
 check_infinite_response({1, Minor}, Hdrs) when Minor >= 1 ->
     HdrValue = lhttpc_lib:header_value("connection", Hdrs, "keep-alive"),
-    case string:to_lower(HdrValue) of
-        "close" -> ok;
-        _       -> erlang:error(no_content_length)
+    case lhttpc_lib:string_lower_equal("close", HdrValue) of
+        true -> ok;
+        _    -> erlang:error(no_content_length)
     end;
 check_infinite_response(_, Hdrs) ->
     HdrValue = lhttpc_lib:header_value("connection", Hdrs, "close"),
-    case string:to_lower(HdrValue) of
-        "keep-alive" -> erlang:error(no_content_length);
-        _            -> ok
+    case lhttpc_lib:string_lower_equal("keep-alive", HdrValue) of
+        true -> erlang:error(no_content_length);
+        _    -> ok
     end.
 
 read_infinite_body(Socket, Hdrs, Ssl) ->
@@ -639,32 +637,32 @@ read_until_closed(Socket, Acc, Hdrs, Ssl) ->
     end.
 
 maybe_close_socket(Socket, Ssl, {1, Minor}, ReqHdrs, RespHdrs) when Minor >= 1->
-    ClientConnection = ?CONNECTION_HDR(ReqHdrs, "keep-alive"),
-    ServerConnection = ?CONNECTION_HDR(RespHdrs, "keep-alive"),
+    ClientConnectionIsClose = lhttpc_lib:string_lower_equal("close", lhttpc_lib:header_value("connection", ReqHdrs, "keep-alive")),
+    ServerConnectionIsClose = lhttpc_lib:string_lower_equal("close", lhttpc_lib:header_value("connection", RespHdrs, "keep-alive")),
     if
-        ClientConnection =:= "close" ->
+        ClientConnectionIsClose ->
             lhttpc_stats:record(close_connection_local, Socket),
             lhttpc_sock:close(Socket, Ssl),
             undefined;
-        ServerConnection =:= "close" ->
+        ServerConnectionIsClose ->
             lhttpc_stats:record(close_connection_remote, Socket),
             lhttpc_sock:close(Socket, Ssl),
             undefined;
-        ClientConnection =/= "close", ServerConnection =/= "close" ->
+        true ->
             Socket
     end;
 maybe_close_socket(Socket, Ssl, _, ReqHdrs, RespHdrs) ->
-    ClientConnection = ?CONNECTION_HDR(ReqHdrs, "keep-alive"),
-    ServerConnection = ?CONNECTION_HDR(RespHdrs, "close"),
+    ClientConnectionIsClose = lhttpc_lib:string_lower_equal("close", lhttpc_lib:header_value("connection", ReqHdrs, "keep-alive")),
+    ServerConnectionIsKeepAlive = lhttpc_lib:string_lower_equal("keep-alive", lhttpc_lib:header_value("connection", RespHdrs, "close")),
     if
-        ClientConnection =:= "close" ->
+        ClientConnectionIsClose ->
             lhttpc_stats:record(close_connection_local, Socket),
             lhttpc_sock:close(Socket, Ssl),
             undefined;
-        ServerConnection =/= "keep-alive" ->
+        not ServerConnectionIsKeepAlive ->
             lhttpc_stats:record(close_connection_remote, Socket),
             lhttpc_sock:close(Socket, Ssl),
             undefined;
-        ClientConnection =/= "close", ServerConnection =:= "keep-alive" ->
+        true ->
             Socket
     end.

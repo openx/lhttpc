@@ -54,3 +54,32 @@ parse_url_test_() ->
         ?_assertEqual({"host", 180, "?query", false},
             lhttpc_lib:parse_url("http://host:180?query"))
     ].
+
+
+string_lower_equal_test_() ->
+  [ ?_assert(lhttpc_lib:string_lower_equal("", ""))
+  , ?_assert(lhttpc_lib:string_lower_equal("apple", "apple"))
+  , ?_assert(lhttpc_lib:string_lower_equal("apple", "Apple"))
+  , ?_assert(lhttpc_lib:string_lower_equal("apple", "APPLE"))
+  , ?_assert(lhttpc_lib:string_lower_equal("@a1x2", "@A1X2"))
+  , ?_assertNot(lhttpc_lib:string_lower_equal("", "x"))
+  , ?_assertNot(lhttpc_lib:string_lower_equal("apple", "aple"))
+  , ?_assertNot(lhttpc_lib:string_lower_equal("apple", "applex"))
+  , ?_assertNot(lhttpc_lib:string_lower_equal("apple", "apxle"))
+  , ?_assertNot(lhttpc_lib:string_lower_equal("APPLE", "apple")) % first arg must already be lowercase
+  , ?_assertNot(lhttpc_lib:string_lower_equal("APPLE", "APPLE"))
+  ].
+
+header_value_test_() ->
+  Hdrs = [ {"Accept-Encoding", "gzip"}
+         , {"Content-Length", "1234"}
+         , {"content-type", "application/json"}
+         , {"accept", "application/json"}
+         ],
+
+  [ ?_assertEqual("application/json", lhttpc_lib:header_value("accept", Hdrs))
+  , ?_assertEqual("application/json", lhttpc_lib:header_value("accept", Hdrs, "text/plain"))
+  , ?_assertEqual("text/plain", lhttpc_lib:header_value("x-accept", Hdrs, "text/plain"))
+  , ?_assertEqual("gzip", lhttpc_lib:header_value("accept-encoding", Hdrs))
+  , ?_assertEqual("gzip", lhttpc_lib:header_value("accept-encoding", [], "gzip"))
+  ].

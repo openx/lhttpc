@@ -35,13 +35,16 @@
         format_request/7,
         header_value/2,
         header_value/3,
-        normalize_method/1
+        normalize_method/1,
+        string_lower_equal/2
     ]).
 -export([maybe_atom_to_list/1]).
 
 -export([format_hdrs/1, dec/1]).
 
 -include("lhttpc_types.hrl").
+
+-compile({inline, [ to_lower_char/1 ]}).
 
 %% @spec header_value(Header, Headers) -> undefined | term()
 %% Header = string()
@@ -71,7 +74,7 @@ header_value(Hdr, Hdrs) ->
 header_value(Hdr, [{Hdr, Value} | _], _) ->
     Value;
 header_value(Hdr, [{ThisHdr, Value}| Hdrs], Default) ->
-    case string:equal(string:to_lower(ThisHdr), Hdr) of
+    case string_lower_equal(Hdr, ThisHdr) of
         true  -> Value;
         false -> header_value(Hdr, Hdrs, Default)
     end;
@@ -228,9 +231,9 @@ add_content_headers(Hdrs, _Body, true) ->
         {undefined, undefined} ->
             [{"Transfer-Encoding", "chunked"} | Hdrs];
         {undefined, TransferEncoding} ->
-            case string:to_lower(TransferEncoding) of
-            "chunked" -> Hdrs;
-            _ -> erlang:error({error, unsupported_transfer_encoding})
+            case string_lower_equal("chunked", TransferEncoding) of
+                true -> Hdrs;
+                _ -> erlang:error({error, unsupported_transfer_encoding})
             end;
         {_Length, undefined} ->
             Hdrs;
@@ -247,11 +250,9 @@ add_host(Hdrs, Host, Port) ->
     end.
 
 is_chunked(Hdrs) ->
-    TransferEncoding = string:to_lower(
-        header_value("transfer-encoding", Hdrs, "undefined")),
-    case TransferEncoding of
-        "chunked" -> true;
-        _ -> false
+    case header_value("transfer-encoding", Hdrs) of
+      undefined -> false;
+      TransferEncoding -> string_lower_equal("chunked", TransferEncoding)
     end.
 
 -spec dec(timeout()) -> timeout().
@@ -260,3 +261,16 @@ dec(Else)                     -> Else.
 
 host(Host, 80)   -> Host;
 host(Host, Port) -> [Host, $:, integer_to_list(Port)].
+
+to_lower_char(C) when $A =< C, C =< $Z -> C + 32;
+to_lower_char(C) -> C.
+
+-spec string_lower_equal(S1::string(), S2::string()) -> boolean().
+%% Returns true if S1 == string:to_lower(S2).
+string_lower_equal([ F1 | R1 ], [ F2 | R2 ]) ->
+    case to_lower_char(F2) of
+        F1 -> string_lower_equal(R1, R2);
+        _  -> false
+    end;
+string_lower_equal([], []) -> true;
+string_lower_equal(_, _) -> false.
