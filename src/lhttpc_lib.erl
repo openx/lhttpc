@@ -107,7 +107,7 @@ parse_url(URL) ->
     {Scheme, HostPortPath} = split_scheme(URL),
     {Host, PortPath} = split_host(HostPortPath, []),
     {Port, Path} = split_port(Scheme, PortPath, []),
-    {string:to_lower(Host), Port, Path, Scheme =:= https}.
+    {Host, Port, Path, Scheme =:= https}.
 
 split_scheme("http://" ++ HostPortPath) ->
     {http, HostPortPath};
@@ -121,7 +121,7 @@ split_host([$/ | _] = PortPath, Host) ->
 split_host([$? | _] = PortPath, Host) ->
     {lists:reverse(Host), PortPath};
 split_host([H | T], Host) ->
-    split_host(T, [H | Host]);
+    split_host(T, [to_lower_char(H) | Host]);
 split_host([], Host) ->
     {lists:reverse(Host), []}.
 
