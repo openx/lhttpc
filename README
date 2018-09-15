@@ -1,5 +1,5 @@
 Dependencies:
- * Erlang/OTP R13-B or newer
+ * Erlang/OTP 18 or newer
    * Application compiler to build, kernel, stdlib and ssl to run
 
 Building: 
