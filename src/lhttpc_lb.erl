@@ -100,6 +100,10 @@ connection_count(Name) ->
 %%% GEN_SERVER CALLBACKS %%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%
 init(Config=#config{host=Host, port=Port, ssl=Ssl}) ->
+    %% Write host config to process dictionary so that it can be fetched with
+    %% `process_info(Pid, dictionary)'.
+    put(lhttpc_lb_host, {Host, Port, Ssl}),
+
     %% we must use insert_new because it is possible a concurrent request is
     %% starting such a server at exactly the same time.
     case ets:insert_new(?MODULE, {{Host,Port,Ssl}, self()}) of
