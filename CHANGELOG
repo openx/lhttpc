@@ -1,3 +1,9 @@
+Version 1.9.0
+* Use max_connections and connection_lifetime options on each request to
+  decide whether a new socket can be opened and, if so, how long it will live.
+  This allows the size of the connection pool and the connection lifetimes to
+  be changed without having to restart the application.
+
 Version 1.8.0
 * Write host/port/ssl to process dictionary in lhttpc_lb for debugging.
 

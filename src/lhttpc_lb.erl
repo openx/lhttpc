@@ -62,7 +62,7 @@ checkout(Host, Port, Ssl, MaxConn, ConnTimeout, RequestLimit, ConnLifetime) ->
                      max_conn = MaxConn, timeout = ConnTimeout,
                      request_limit = RequestLimit, conn_lifetime = ConnLifetime},
     Lb = find_or_start_lb(Config),
-    gen_server:call(Lb, {checkout, self()}, infinity).
+    gen_server:call(Lb, {checkout, self(), MaxConn, ConnLifetime}, infinity).
 
 %% Called when we're done and the socket can still be reused
 -spec checkin(host(), port_number(), SSL::boolean(), Socket::socket()) -> ok.
@@ -114,13 +114,13 @@ init(Config=#config{host=Host, port=Port, ssl=Ssl}) ->
             ignore
     end.
 
-handle_call({checkout,Pid}, _From, S = #state{free=[], clients=Tid, config=Config}) ->
+handle_call({checkout, Pid, MaxConn, ConnLifetime}, _From, S=#state{free=[], clients=Tid}) ->
     Size = ets:info(Tid, size),
-    case Config#config.max_conn > Size of
+    case Size < MaxConn of
         true ->
             %% We don't have an open socket, but the client can open one.
             Expire =
-                case Config#config.conn_lifetime of
+                case ConnLifetime of
                     infinity     -> undefined;
                     ConnLifetime -> erlang:monotonic_time() + erlang:convert_time_unit(ConnLifetime, milli_seconds, native)
                 end,
@@ -129,7 +129,7 @@ handle_call({checkout,Pid}, _From, S = #state{free=[], clients=Tid, config=Confi
         false ->
             {reply, retry_later, S}
     end;
-handle_call({checkout,Pid}, _From,
+handle_call({checkout, Pid, _MaxConn, _ConnLifetime}, _From,
             S=#state{free=[#conn_free{socket=Taken, timer_ref=Timer, conn_info=ConnInfo} | Free], clients=Tid, config=#config{ssl=Ssl}}) ->
     lhttpc_sock:setopts(Taken, [{active,false}], Ssl),
     case lhttpc_sock:controlling_process(Taken, Pid, Ssl) of
