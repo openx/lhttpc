@@ -180,9 +180,10 @@ print() ->
             [ #start_time{start_time=StartTime} ] = ets:lookup(?MODULE, start_time),
             ServiceLifetime = erlang:convert_time_unit(erlang:monotonic_time() - StartTime, native, micro_seconds),
 
-            io:format("                                                                 Remote     Local          Avg\n"
-                      "Host                                       Requests   Sockets     Close     Close Ac Id   Conn\n"
-                      "---------------------------------------- ---------- --------- --------- --------- -- -- ------\n"),
+            io:format("Time: ~13.1f"     "                           Total     Total    Remote     Local            Avg\n"
+                      "Host                                       Requests   Sockets     Close     Close Act Idl   Conn\n"
+                      "---------------------------------------- ---------- --------- --------- --------- --- --- ------\n",
+                     [ ServiceLifetime / 1000000 ]),
             lists:foreach(
               fun (#hps_stats{key=Key={Host, Port, _},
                               request_count=Requests, connection_count=Connections,
@@ -190,7 +191,7 @@ print() ->
                               connection_local_close_count=LocalClose,
                               connection_cumulative_lifetime_usec=ConnectionLifetime}) ->
                       {ActiveConnections, IdleConnections} = lhttpc_lb:connection_count(Key),
-                      io:format("~-40.40s ~10B ~9B ~9B ~9B ~2B ~2B ~6.2f\n",
+                      io:format("~-40.40s ~10B ~9B ~9B ~9B ~3B ~3B ~6.2f\n",
                                 [ io_lib:format("~s:~B", [ Host, Port ])
                                 , Requests, Connections, RemoteClose, LocalClose
                                 , ActiveConnections, IdleConnections
