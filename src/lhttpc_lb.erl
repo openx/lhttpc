@@ -153,20 +153,28 @@ handle_call(_Msg, _From, S) ->
 
 handle_cast({checkin, Pid, Socket}, S = #state{config=Config=#config{ssl=Ssl, timeout=T}, clients=Tid, free=Free}) ->
     lhttpc_stats:record(end_request, Socket),
-    ConnInfo = remove_client(Tid, Pid),
-    case
-        ConnInfo =:= undefined orelse
-        request_limit_reached(ConnInfo, Config) orelse
-        expire_time_reached(ConnInfo) orelse
-        %% the client cast function took care of giving us ownership
-        %% Set {active, once} so that we will get a message if the remote closes the socket.
-        lhttpc_sock:setopts(Socket, [{active, once}], Ssl) =/= ok % socket closed or failed
-    of
-        true ->
-            noreply_maybe_shutdown(remove_socket(Socket, S));
-        false ->
+    SocketAction =
+        case remove_client(Tid, Pid) of
+            undefined          -> ConnInfo = undefined,
+                                  close_connection_local;
+            ConnInfo ->
+                case request_limit_reached(ConnInfo, Config) orelse expire_time_reached(ConnInfo) of
+                    true       -> close_connection_local;
+                    false ->
+                        %% the client cast function took care of giving us ownership
+                        %% Set {active, once} so that we will get a message if the remote closes the socket.
+                        case lhttpc_sock:setopts(Socket, [{active, once}], Ssl) of
+                            ok -> keep_socket;
+                            _  -> close_connection_remote
+                        end
+                end
+        end,
+    case SocketAction of
+        keep_socket ->
             Timer = start_timer(Socket,T),
-            {noreply, S#state{free=[#conn_free{socket = Socket, timer_ref = Timer, conn_info = ConnInfo} | Free]}}
+            {noreply, S#state{free=[#conn_free{socket = Socket, timer_ref = Timer, conn_info = ConnInfo} | Free]}};
+        CloseConnectionType ->
+            noreply_maybe_shutdown(remove_socket(Socket, CloseConnectionType, S))
     end;
 handle_cast(_Msg, State) ->
     {noreply, State}.
@@ -182,19 +190,19 @@ handle_info({'DOWN', _Ref, process, Pid, Reason}, S=#state{clients=Tid}) ->
     remove_client(Tid,Pid),
     noreply_maybe_shutdown(S);
 handle_info({tcp_closed, Socket}, State) ->
-    noreply_maybe_shutdown(remove_socket(Socket,State));
+    noreply_maybe_shutdown(remove_socket(Socket, close_connection_remote, State));
 handle_info({ssl_closed, Socket}, State) ->
-    noreply_maybe_shutdown(remove_socket(Socket,State));
+    noreply_maybe_shutdown(remove_socket(Socket, close_connection_remote, State));
 handle_info({timeout, Socket}, State) ->
-    noreply_maybe_shutdown(remove_socket(Socket,State));
+    noreply_maybe_shutdown(remove_socket(Socket, close_connection_remote, State));
 handle_info({tcp_error, Socket, _}, State) ->
-    noreply_maybe_shutdown(remove_socket(Socket,State));
+    noreply_maybe_shutdown(remove_socket(Socket, close_connection_remote, State));
 handle_info({ssl_error, Socket, _}, State) ->
-    noreply_maybe_shutdown(remove_socket(Socket,State));
+    noreply_maybe_shutdown(remove_socket(Socket, close_connection_remote, State));
 handle_info({tcp, Socket, _}, State) ->
-    noreply_maybe_shutdown(remove_socket(Socket,State));
+    noreply_maybe_shutdown(remove_socket(Socket, close_connection_remote, State));
 handle_info({ssl, Socket, _}, State) ->
-    noreply_maybe_shutdown(remove_socket(Socket,State));
+    noreply_maybe_shutdown(remove_socket(Socket, close_connection_remote, State));
 handle_info(timeout, State) ->
     {stop, normal, State};
 handle_info(_Info, State) ->
@@ -268,9 +276,9 @@ remove_client(Tid, Pid) ->
             ConnInfo
     end.
 
--spec remove_socket(socket(), #state{}) -> #state{}.
-remove_socket(Socket, S = #state{config=#config{ssl=Ssl}, free=Free}) ->
-    lhttpc_stats:record(close_connection_local, Socket),
+-spec remove_socket(socket(), close_connection_local | close_connection_remote, #state{}) -> #state{}.
+remove_socket(Socket, StatsCloseType, S = #state{config=#config{ssl=Ssl}, free=Free}) ->
+    lhttpc_stats:record(StatsCloseType, Socket),
     lhttpc_sock:close(Socket, Ssl),
     S#state{free=drop_and_cancel(Socket,Free)}.
 
