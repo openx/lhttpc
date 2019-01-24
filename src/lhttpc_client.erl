@@ -105,11 +105,15 @@ execute(ReqId, From, Host, Port, Ssl, Path, Method, Hdrs, Body, Options) ->
     ConnectionLifetime = proplists:get_value(connection_lifetime, Options, infinity),
     {ChunkedUpload, Request} = lhttpc_lib:format_request(Path, NormalizedMethod,
         Hdrs, Host, Port, Body, PartialUpload),
-    Socket = case lhttpc_lb:checkout(Host, Port, Ssl, MaxConnections, ConnectionTimeout, RequestLimit, ConnectionLifetime) of
-        {ok, S}   -> S; % Re-using HTTP/1.1 connections
-        retry_later -> throw(retry_later);
-        no_socket -> undefined % Opening a new HTTP/1.1 connection
-    end,
+    %% BaseAttempts is 2 for an existing socket because we may find that the
+    %% socket has been closed when we use it and we want to open a new socket
+    %% and retry at least once in that case.
+    {Socket, BaseAttempts} =
+        case lhttpc_lb:checkout(Host, Port, Ssl, MaxConnections, ConnectionTimeout, RequestLimit, ConnectionLifetime) of
+            {ok, S}     -> {S, 2};         % Re-using HTTP/1.1 connections
+            no_socket   -> {undefined, 1}; % Opening a new HTTP/1.1 connection
+            retry_later -> throw(retry_later)
+        end,
     State = #client_state{
         req_id = ReqId,
         host = Host,
@@ -123,7 +127,7 @@ execute(ReqId, From, Host, Port, Ssl, Path, Method, Hdrs, Body, Options) ->
         connect_timeout = proplists:get_value(connect_timeout, Options,
             infinity),
         connect_options = proplists:get_value(connect_options, Options, []),
-        attempts = 1 + proplists:get_value(send_retry, Options, 1),
+        attempts = BaseAttempts + proplists:get_value(send_retry, Options, 0),
         partial_upload = PartialUpload,
         upload_window = UploadWindowSize,
         chunked_upload = ChunkedUpload,

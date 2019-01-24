@@ -1,25 +1,35 @@
-Version 1.9.0
+Version 1.10.0:
+* Change details of retry handling on connection failure.  Previously a
+  failure was always retried; now a failure is only retried if an existing
+  socket is being used, under the assumption that the failure is because the
+  remote end closed the existing socket before the current request tried to
+  use it.
+* Change default for send_retry option from 1 to 0, so that requests will not
+  be retried by default (unless they are reusing an existing connection, in
+  which case a new connection is opened and they are retried once).
+
+Version 1.9.0:
 * Use max_connections and connection_lifetime options on each request to
   decide whether a new socket can be opened and, if so, how long it will live.
   This allows the size of the connection pool and the connection lifetimes to
   be changed without having to restart the application.
 
-Version 1.8.0
+Version 1.8.0:
 * Write host/port/ssl to process dictionary in lhttpc_lb for debugging.
 
-Version 1.7.0
+Version 1.7.0:
 * Optimize header handling.
 
-Version 1.6.0
+Version 1.6.0:
 * Add request_limit and connection_lifetime options to lhttpc:request.
 * Small fixes to lhttpc specs.
 * Convert from os:timestamp/0 to erlang:monotonic_time/0.
 * Convert rebar.config to rebar3.
 
-Version 1.5.4
+Version 1.5.4:
 * Remove ssl:seed/1 call, which was removed in OTP R14B.
 
-Version 1.5.3
+Version 1.5.3:
 * lhttpc:request spec fixes for Erlang 19 dialyzer.
 
 Version 1.5.2:

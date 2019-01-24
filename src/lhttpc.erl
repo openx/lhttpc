@@ -274,9 +274,9 @@ request(URL, Method, Hdrs, Body, Timeout, Options) ->
 %%
 %% `{send_retry, N}' specifies how many times the client should retry
 %% sending a request if the connection is closed after the data has been
-%% sent. The default value is `1'. If `{partial_upload, WindowSize}'
+%% sent. The default value is `0'. If `{partial_upload, WindowSize}'
 %% (see below) is specified, the client cannot retry after the first part
-%% of the body has been sent since it doesn't keep the whole entitity body
+%% of the body has been sent since it doesn't keep the whole entity body
 %% in memory.
 %%
 %% `{partial_upload, WindowSize}' means that the request entity body will be
