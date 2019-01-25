@@ -100,6 +100,7 @@ test_no(N, Tests) ->
 
 start_app() ->
     {ok, _} = application:ensure_all_started(ssl),
+    ok = application:set_env(lhttpc, stats, true),
     ok = lhttpc:start(),
     wait_for_dns(0),
     ok.

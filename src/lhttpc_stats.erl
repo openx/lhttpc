@@ -195,9 +195,9 @@ print() ->
             [ #start_time{start_time=StartTime} ] = ets:lookup(?MODULE, start_time),
             ServiceLifetime = erlang:convert_time_unit(erlang:monotonic_time() - StartTime, native, micro_seconds),
 
-            io:format("Time: ~13.1f"     "                           Total     Total   Connect    Remote     Local          Avg #\n"
-                      "Host                                       Requests   Sockets    Errors     Close     Close Act Idl  Conns\n"
-                      "---------------------------------------- ---------- --------- --------- --------- --------- --- --- ------\n",
+            io:format("Time: ~13.1f"     "                           Total     Total   Connect    Remote     Local          Avg # Avg Conn\n"
+                      "Host                                       Requests   Sockets    Errors     Close     Close Act Idl  Conns     Time\n"
+                      "---------------------------------------- ---------- --------- --------- --------- --------- --- --- ------ --------\n",
                      [ ServiceLifetime / 1000000 ]),
             lists:foreach(
               fun (#hps_stats{key=Key={Host, Port, _},
@@ -207,11 +207,12 @@ print() ->
                               connection_local_close_count=LocalClose,
                               connection_cumulative_lifetime_usec=ConnectionLifetime}) ->
                       {ActiveConnections, IdleConnections} = lhttpc_lb:connection_count(Key),
-                      io:format("~-40.40s ~10B ~9B ~9B ~9B ~9B ~3B ~3B ~6.2f\n",
+                      io:format("~-40.40s ~10B ~9B ~9B ~9B ~9B ~3B ~3B ~6.2f ~8.2f\n",
                                 [ io_lib:format("~s:~B", [ Host, Port ])
                                 , Requests, Connections, ConnectError, RemoteClose, LocalClose
                                 , ActiveConnections, IdleConnections
                                 , ConnectionLifetime / ServiceLifetime
+                                , divide(ConnectionLifetime, RemoteClose + LocalClose) / 1000000
                                 ]);
                   (_) -> ok
               end, lists:sort(ets:tab2list(?MODULE)));
@@ -252,3 +253,6 @@ code_change(_OldVsn, State, _Extra) ->
 %%%
 %%% PRIVATE FUNCTIONS
 %%%
+
+divide(_A, 0) -> 0.0;
+divide(A, B)  -> A / B.
