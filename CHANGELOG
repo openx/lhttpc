@@ -1,3 +1,7 @@
+Version 1.10.1:
+* Include connection failures in stats collection; previously these were not
+  tracked.
+
 Version 1.10.0:
 * Change details of retry handling on connection failure.  Previously a
   failure was always retried; now a failure is only retried if an existing

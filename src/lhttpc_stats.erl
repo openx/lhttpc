@@ -21,6 +21,7 @@
 -record(hps_stats, {key :: hps_key(),
                     request_count=0 :: integer(),
                     connection_count=0 :: integer(),
+                    connection_error_count=0 :: integer(),
                     connection_remote_close_count=0 :: integer(),
                     connection_local_close_count=0 :: integer(),
                     connection_cumulative_lifetime_usec=0 :: integer()}).
@@ -55,6 +56,7 @@ stats_enabled() ->
 
 
 -spec record(open_connection, {HPSKey::hps_key(), Socket::lhttpc_lb:socket()}) -> ok;
+            (open_connection_error, HPSKey::hps_key()) -> ok;
             (close_connection_remote, Socket::lhttpc_lb:socket()) -> ok;
             (close_connection_local, Socket::lhttpc_lb:socket()) -> ok;
             (close_connection_timeout, Pid::pid()) -> ok;
@@ -70,6 +72,19 @@ record(open_connection, {HPSKey, Socket}) ->
                     ets:insert_new(?MODULE, #hps_stats{key=HPSKey, connection_count=1})
             end,
             ets:insert_new(?MODULE, #conn_stats{key=Socket, hps_key=HPSKey, open_time=erlang:monotonic_time()}),
+            ok;
+        false -> ok
+    end;
+
+record(open_connection_error, HPSKey) ->
+    case stats_enabled() of
+        true ->
+            try ets:update_counter(?MODULE, HPSKey, [ {#hps_stats.connection_count, 1},
+                                                      {#hps_stats.connection_error_count, 1} ])
+            catch
+                error:badarg ->
+                    ets:insert_new(?MODULE, #hps_stats{key=HPSKey, connection_count=1, connection_error_count=1})
+            end,
             ok;
         false -> ok
     end;
@@ -180,20 +195,21 @@ print() ->
             [ #start_time{start_time=StartTime} ] = ets:lookup(?MODULE, start_time),
             ServiceLifetime = erlang:convert_time_unit(erlang:monotonic_time() - StartTime, native, micro_seconds),
 
-            io:format("Time: ~13.1f"     "                           Total     Total    Remote     Local            Avg\n"
-                      "Host                                       Requests   Sockets     Close     Close Act Idl   Conn\n"
-                      "---------------------------------------- ---------- --------- --------- --------- --- --- ------\n",
+            io:format("Time: ~13.1f"     "                           Total     Total   Connect    Remote     Local          Avg #\n"
+                      "Host                                       Requests   Sockets    Errors     Close     Close Act Idl  Conns\n"
+                      "---------------------------------------- ---------- --------- --------- --------- --------- --- --- ------\n",
                      [ ServiceLifetime / 1000000 ]),
             lists:foreach(
               fun (#hps_stats{key=Key={Host, Port, _},
                               request_count=Requests, connection_count=Connections,
+                              connection_error_count=ConnectError,
                               connection_remote_close_count=RemoteClose,
                               connection_local_close_count=LocalClose,
                               connection_cumulative_lifetime_usec=ConnectionLifetime}) ->
                       {ActiveConnections, IdleConnections} = lhttpc_lb:connection_count(Key),
-                      io:format("~-40.40s ~10B ~9B ~9B ~9B ~3B ~3B ~6.2f\n",
+                      io:format("~-40.40s ~10B ~9B ~9B ~9B ~9B ~3B ~3B ~6.2f\n",
                                 [ io_lib:format("~s:~B", [ Host, Port ])
-                                , Requests, Connections, RemoteClose, LocalClose
+                                , Requests, Connections, ConnectError, RemoteClose, LocalClose
                                 , ActiveConnections, IdleConnections
                                 , ConnectionLifetime / ServiceLifetime
                                 ]);

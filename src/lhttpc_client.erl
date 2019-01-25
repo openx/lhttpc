@@ -164,10 +164,13 @@ send_request(#client_state{socket = undefined} = State) ->
             send_request(State#client_state{socket = Socket});
         {error, etimedout} ->
             % TCP stack decided to give up
+            lhttpc_stats:record(open_connection_error, {Host, Port, Ssl}),
             throw(connect_timeout);
         {error, timeout} ->
+            lhttpc_stats:record(open_connection_error, {Host, Port, Ssl}),
             throw(connect_timeout);
         {error, Reason} ->
+            lhttpc_stats:record(open_connection_error, {Host, Port, Ssl}),
             erlang:error(Reason)
     end;
 send_request(State) ->
