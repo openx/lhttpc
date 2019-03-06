@@ -114,7 +114,11 @@ init(Config=#config{host=Host, port=Port, ssl=Ssl}) ->
             ignore
     end.
 
-handle_call({checkout, Pid, MaxConn, ConnLifetime}, _From, S=#state{free=[], clients=Tid}) ->
+handle_call({checkout, Pid, MaxConn, ConnLifetime}, _From, S0=#state{free=[], clients=Tid}) ->
+    S1 = case S0#state.config of
+             #config{max_conn=MaxConn, conn_lifetime=ConnLifetime} -> S0;
+             StaleConfig -> S0#state{config = StaleConfig#config{max_conn = MaxConn, conn_lifetime = ConnLifetime}}
+         end,
     Size = ets:info(Tid, size),
     case Size < MaxConn of
         true ->
@@ -125,25 +129,29 @@ handle_call({checkout, Pid, MaxConn, ConnLifetime}, _From, S=#state{free=[], cli
                     ConnLifetime -> erlang:monotonic_time() + erlang:convert_time_unit(ConnLifetime, milli_seconds, native)
                 end,
             add_client(Tid, Pid, #conn_info{request_count = 1, expire = Expire}),
-            {reply, no_socket, S};
+            {reply, no_socket, S1};
         false ->
-            {reply, retry_later, S}
+            {reply, retry_later, S1}
     end;
-handle_call({checkout, Pid, _MaxConn, _ConnLifetime}, _From,
-            S=#state{free=[#conn_free{socket=Taken, timer_ref=Timer, conn_info=ConnInfo} | Free], clients=Tid, config=#config{ssl=Ssl}}) ->
+handle_call({checkout, Pid, MaxConn, ConnLifetime}, _From,
+            S0=#state{free=[#conn_free{socket=Taken, timer_ref=Timer, conn_info=ConnInfo} | Free], clients=Tid, config=#config{ssl=Ssl}}) ->
+    S1 = case S0#state.config of
+             #config{max_conn=MaxConn, conn_lifetime=ConnLifetime} -> S0;
+             StaleConfig -> S0#state{config = StaleConfig#config{max_conn = MaxConn, conn_lifetime = ConnLifetime}}
+         end,
     lhttpc_sock:setopts(Taken, [{active,false}], Ssl),
     case lhttpc_sock:controlling_process(Taken, Pid, Ssl) of
         ok ->
             cancel_timer(Timer, Taken),
             add_client(Tid, Pid, ConnInfo#conn_info{request_count = ConnInfo#conn_info.request_count + 1}),
-            {reply, {ok, Taken}, S#state{free=Free}};
+            {reply, {ok, Taken}, S1#state{free=Free}};
         {error, badarg} ->
             %% The caller died.
             lhttpc_sock:setopts(Taken, [{active, once}], Ssl),
-            {noreply, S};
+            {noreply, S1};
         {error, _Reason} -> % socket is closed or something
             cancel_timer(Timer, Taken),
-            handle_call({checkout,Pid}, _From, S#state{free=Free})
+            handle_call({checkout,Pid}, _From, S1#state{free=Free})
     end;
 handle_call({connection_count}, _From, S = #state{free=Free, clients=Tid}) ->
     {reply, {ets:info(Tid, size), length(Free)}, S};
