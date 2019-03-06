@@ -159,14 +159,17 @@ handle_call({connection_count}, _From, S = #state{free=Free, clients=Tid}) ->
 handle_call(_Msg, _From, S) ->
     {noreply, S}.
 
-handle_cast({checkin, Pid, Socket}, S = #state{config=Config=#config{ssl=Ssl, timeout=T}, clients=Tid, free=Free}) ->
+handle_cast({checkin, Pid, Socket}, S = #state{config=Config=#config{ssl=Ssl, max_conn=MaxConn, timeout=T}, clients=Tid, free=Free}) ->
     lhttpc_stats:record(end_request, Socket),
     SocketAction =
         case remove_client(Tid, Pid) of
             undefined          -> ConnInfo = undefined,
                                   close_connection_local;
             ConnInfo ->
-                case request_limit_reached(ConnInfo, Config) orelse expire_time_reached(ConnInfo) of
+                case request_limit_reached(ConnInfo, Config) orelse
+                    expire_time_reached(ConnInfo) orelse
+                    ets:info(Tid, size) >= MaxConn
+                of
                     true       -> close_connection_local;
                     false ->
                         %% the client cast function took care of giving us ownership

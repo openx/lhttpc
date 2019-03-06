@@ -1,3 +1,9 @@
+Version 1.10.2:
+* Update a pool's max_connections on each call, and apply max_connections when
+  returning a socket to the connection pool.  This allows the pool size to be
+  reduced more quickly than waiting for open sockets to be closed by the
+  remote.
+
 Version 1.10.1:
 * Include connection failures in stats collection; previously these were not
   tracked.
