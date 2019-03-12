@@ -148,6 +148,9 @@ record(close_connection_timeout, Pid) ->
                     end;
                 [] ->
                     ?DEBUG(io:format(standard_error, "D: pid not found: ~p\n", [ Pid ])),
+                    ?DEBUG(throw(not_found));
+                MultiplePorts ->
+                    error_logger:error_msg("~p:~p: unexpected return ~p ~p\n", [ ?MODULE, ?LINE, Pid, MultiplePorts ]),
                     ?DEBUG(throw(not_found))
             end;
         false -> ok

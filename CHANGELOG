@@ -1,3 +1,8 @@
+Version 1.10.3:
+* Fix a crash in lhttpc_stats that can happen when a PID has more than one
+  socket.  This error points to an unfixed bug in the lhttpc_stats connection
+  tracking, but we don't want to crash.
+
 Version 1.10.2:
 * Update a pool's max_connections on each call, and apply max_connections when
   returning a socket to the connection pool.  This allows the pool size to be
