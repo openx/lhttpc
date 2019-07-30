@@ -29,7 +29,7 @@
 %%% @end
 {application, lhttpc,
     [{description, "Lightweight HTTP Client"},
-        {vsn, "1.10.3"},
+        {vsn, "1.11.0"},
         {modules, []},
         {registered, [lhttpc_sup, httpc_lb_sup, lhttpc_stats]},
         {applications, [kernel, stdlib, ssl, crypto]},

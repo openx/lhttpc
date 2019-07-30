@@ -2,7 +2,7 @@
 
 -behaviour(gen_server).
 
--export([start_link/1, stats_enabled/0, record/2, print/0]).
+-export([start_link/1, enable_stats/1, stats_enabled/0, record/2, print/0]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          code_change/3, terminate/2]).
 
@@ -45,9 +45,14 @@
 %%% EXTERNAL INTERFACE
 %%%
 
--spec start_link(KeepStats::boolean) -> {ok, pid()}.
-start_link(KeepStats) ->
+-spec start_link(KeepStats::boolean()) -> {ok, pid()}.
+start_link(KeepStats) when is_boolean(KeepStats) ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, KeepStats, []).
+
+
+-spec enable_stats(KeepStats::boolean()) -> ok.
+enable_stats(KeepStats) when is_boolean(KeepStats) ->
+    gen_server:cast(?MODULE, {enable_stats, KeepStats}).
 
 
 -spec stats_enabled() -> boolean().
@@ -63,7 +68,14 @@ stats_enabled() ->
             (start_request, {HPSKey::hps_key(), Socket::lhttpc_lb:socket(), Pid::pid()}) -> ok;
             (end_request, Socket::lhttpc_lb:socket()) -> ok.
 
-record(open_connection, {HPSKey, Socket}) ->
+record(Stat, Arg) ->
+    try
+        record_untrapped(Stat, Arg)
+    catch
+        error:badarg -> ok
+    end.
+
+record_untrapped(open_connection, {HPSKey, Socket}) ->
     case stats_enabled() of
         true ->
             try ets:update_counter(?MODULE, HPSKey, {#hps_stats.connection_count, 1})
@@ -76,7 +88,7 @@ record(open_connection, {HPSKey, Socket}) ->
         false -> ok
     end;
 
-record(open_connection_error, HPSKey) ->
+record_untrapped(open_connection_error, HPSKey) ->
     case stats_enabled() of
         true ->
             try ets:update_counter(?MODULE, HPSKey, [ {#hps_stats.connection_count, 1},
@@ -89,7 +101,7 @@ record(open_connection_error, HPSKey) ->
         false -> ok
     end;
 
-record(close_connection_remote, Socket) ->
+record_untrapped(close_connection_remote, Socket) ->
     case stats_enabled() of
         true ->
             case ets:lookup(?MODULE, Socket) of
@@ -108,7 +120,7 @@ record(close_connection_remote, Socket) ->
         false -> ok
     end;
 
-record(close_connection_local, Socket) ->
+record_untrapped(close_connection_local, Socket) ->
     case stats_enabled() of
         true ->
             case ets:lookup(?MODULE, Socket) of
@@ -127,7 +139,7 @@ record(close_connection_local, Socket) ->
         false -> ok
     end;
 
-record(close_connection_timeout, Pid) ->
+record_untrapped(close_connection_timeout, Pid) ->
     case stats_enabled() of
         true ->
             case ets:match(?MODULE, ?STATS_CONN_MATCH_PID(Pid)) of
@@ -156,7 +168,7 @@ record(close_connection_timeout, Pid) ->
         false -> ok
     end;
 
-record(start_request, {HPSKey, Socket, Pid}) ->
+record_untrapped(start_request, {HPSKey, Socket, Pid}) ->
     case stats_enabled() of
         true ->
             ets:update_counter(?MODULE, HPSKey, {#hps_stats.request_count, 1}),
@@ -183,7 +195,7 @@ record(start_request, {HPSKey, Socket, Pid}) ->
         false -> ok
     end;
 
-record(end_request, Socket) ->
+record_untrapped(end_request, Socket) ->
     case stats_enabled() of
         true ->
             ets:update_element(?MODULE, Socket, {#conn_stats.last_idle_time, erlang:monotonic_time()}),
@@ -230,10 +242,7 @@ print() ->
 %%%
 
 init(KeepStats) ->
-    if KeepStats -> ets:new(?MODULE, [ named_table, set, public, {keypos, ?STATS_KEYPOS}, {write_concurrency, true} ]),
-                    ets:insert_new(?MODULE, #start_time{start_time = erlang:monotonic_time()});
-       true      -> ok
-    end,
+    enable_stats_internal(KeepStats),
     {ok, #lhttpc_stats_state{stats_enabled=KeepStats}}.
 
 handle_call(stats_enabled, _From, State) ->
@@ -241,6 +250,9 @@ handle_call(stats_enabled, _From, State) ->
 handle_call(_Request, _From, State) ->
     {noreply, State}.
 
+handle_cast({enable_stats, EnableStats}, State) when is_boolean(EnableStats) ->
+    enable_stats_internal(EnableStats),
+    {noreply, State};
 handle_cast(_Request, State) ->
     {noreply, State}.
 
@@ -256,6 +268,21 @@ code_change(_OldVsn, State, _Extra) ->
 %%%
 %%% PRIVATE FUNCTIONS
 %%%
+
+enable_stats_internal (true) ->
+    try
+        ets:new(?MODULE, [ named_table, set, public, {keypos, ?STATS_KEYPOS}, {write_concurrency, true} ]),
+        ets:insert_new(?MODULE, #start_time{start_time = erlang:monotonic_time()})
+    catch
+        error:badarg -> ok                      % Table already exists.
+    end;
+enable_stats_internal (false) ->
+    try
+        ets:delete(?MODULE)
+    catch
+        error:badarg -> ok                      % Table does not exist.
+    end.
+
 
 divide(_A, 0) -> 0.0;
 divide(A, B)  -> A / B.

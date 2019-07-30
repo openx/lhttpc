@@ -77,7 +77,7 @@ request(ReqId, From, Host, Port, Ssl, Path, Method, Hdrs, Body, Options) ->
     Result = try
         execute(ReqId, From, Host, Port, Ssl, Path, Method, Hdrs, Body, Options)
     catch
-        Reason ->
+        throw:Reason ->
             {response, ReqId, self(), {error, Reason}};
         error:closed ->
             {response, ReqId, self(), {error, connection_closed}};

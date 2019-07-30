@@ -1,3 +1,7 @@
+Version 1.11.0:
+* Add lhttpc_stats:enable_stats/1 function to allow turning stats collection
+  on or off without restarting the application.
+
 Version 1.10.3:
 * Fix a crash in lhttpc_stats that can happen when a PID has more than one
   socket.  This error points to an unfixed bug in the lhttpc_stats connection
