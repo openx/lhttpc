@@ -1,3 +1,7 @@
+Version 1.11.1:
+* The lhttpc_dns:check_table should not create the lhttpd_dns table if it
+  doesn't exist.
+
 Version 1.11.0:
 * Add lhttpc_stats:enable_stats/1 function to allow turning stats collection
   on or off without restarting the application.

@@ -176,7 +176,6 @@ reset_table() ->
 
 check_table () ->
   case ets:info(?MODULE, size) of
-    undefined -> catch create_table(),
-                 {table_missing, 0};
+    undefined -> {table_missing, 0};
     N         -> {ok, N}
   end.
