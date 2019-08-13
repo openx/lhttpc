@@ -14,10 +14,12 @@
 %% -include_lib("kernel/include/inet.hrl").
 
 
--type expiration_ts() :: integer().
+-type native_time() :: integer().
+-type ttl() :: pos_integer().
 
-%% -type ip_entry () :: {ip_address(), expiration_ts()}.
-%% -type ip_entry () :: inet:ip_address().
+-type ip_entry () :: {inet:ip_address(), native_time() | 'infinity'}.
+%% Tuple of any length is OK, but 2 is enough to satisfy dialyzer.
+-type ip_addrs () :: {ip_entry()} | {ip_entry(), ip_entry()}.
 
 -type dns_stats() :: { SuccessCount :: non_neg_integer()
                      , FailureCount :: non_neg_integer()
@@ -26,8 +28,8 @@
 
 -record(dns_rec,
         { hostname :: inet:hostname()
-        , ip_addrs :: tuple()               % list_to_tuple(list(ip_entry())).
-        , expiration_ts :: expiration_ts()
+        , ip_addrs :: ip_addrs()            % list_to_tuple(list(ip_entry())).
+        , expiration_time :: native_time()
         , stats :: dns_stats()
         }).
 
@@ -41,8 +43,8 @@ choose_addr (IPAddrs) when is_tuple(IPAddrs) ->
   %% just choose a random one.
   case size(IPAddrs) of
     0    -> undefined;
-    1    -> element(1, IPAddrs);
-    Size -> element(rand:uniform(Size), IPAddrs)
+    1    -> element(1, element(1, IPAddrs));
+    Size -> element(1, element(rand:uniform(Size), IPAddrs))
   end;
 choose_addr(undefined) -> undefined.
 
@@ -55,19 +57,20 @@ monotonic_time() ->
 -define(ERROR_CACHE_SECONDS, 1).
 -define(SUCCESS_CACHE_EXTRA_SECONDS, 2).
 -define(MAX_CACHE_SECONDS, (3600 * 24)).
--define(MIN_CACHE_SECONDS_DEFAULT, 300).
+-define(MIN_CACHE_SECONDS, 60).
+-define(DYNAMIC_REQUERY_SECONDS, 5).
 -define(MAX_CACHE_SIZE, 10000).
 
 
--spec lookup(Host::string()) -> tuple() | 'undefined' | string().
+-spec lookup(inet:hostname()) -> tuple() | 'undefined' | inet:hostname().
 lookup (Host) ->
   {WantRefresh, CachedIPAddrs, Now, CachedStats} =
     try ets:lookup(?MODULE, Host) of
       [] ->                                             % Not in cache.
         {true, undefined, lhttpc_dns:monotonic_time(), undefined};
-      [ #dns_rec{ip_addrs=IPAddrs0, expiration_ts=ExpirationTS, stats=CachedStats0} ] ->      % Cached, maybe stale.
+      [ #dns_rec{ip_addrs=IPAddrs0, expiration_time=ExpirationTime, stats=CachedStats0} ] -> % Cached, maybe stale.
         Now0 = lhttpc_dns:monotonic_time(),
-        {Now0 >= ExpirationTS, IPAddrs0, Now0, CachedStats0}
+        {Now0 >= ExpirationTime, IPAddrs0, Now0, CachedStats0}
     catch
       error:badarg ->
         {fallback, undefined, undefined, undefined}
@@ -89,27 +92,29 @@ lookup (Host) ->
             UpdatedFailureLookup =
               case CachedIPAddrs of
                 undefined -> FailureLookup;
-                _         -> {CachedIPAddrs, min_cache_seconds()}
+                _         -> {CachedIPAddrs, ?MIN_CACHE_SECONDS}
               end,
             {UpdatedFailureLookup, count_failure(CachedStats)};
           SuccessLookup ->
-            {SuccessLookup, count_success(CachedStats, Now)}
+            MergedLookup = merge_addrs(SuccessLookup, CachedIPAddrs, Now),
+            {MergedLookup, count_success(CachedStats, Now)}
         end,
       ets_insert_bounded(?MODULE, #dns_rec{hostname = Host, ip_addrs = IPAddrs,
-                                           expiration_ts = Now + erlang:convert_time_unit(TTL, seconds, native),
+                                           expiration_time = Now + erlang:convert_time_unit(TTL, seconds, native),
                                            stats = Stats}),
       choose_addr(IPAddrs)
   end.
 
 
--spec lookup_uncached(Host::string()) -> {IPAddrs::tuple()|'undefined', CacheSeconds::non_neg_integer()}.
+-spec lookup_uncached(Host::inet:hostname()) -> {list(ip_entry())|'undefined', ttl()}.
 lookup_uncached (Host) ->
   case inet:parse_address(Host) of
     {ok, IPAddr} ->
       %% If Host looks like an IP address already, just return it.
-      {{IPAddr}, ?MAX_CACHE_SECONDS};
+      {[ {IPAddr, 'infinity'} ], ?MAX_CACHE_SECONDS};
     _ ->
       %% Otherwise do a DNS lookup for the hostname.
+      Now = lhttpc_dns:monotonic_time(),
       case inet_res:resolve(Host, in, a) of
         {ok, DNSRec} ->
           Answers = inet_dns:msg(DNSRec, anlist),
@@ -122,7 +127,9 @@ lookup_uncached (Host) ->
                       %% 2 seconds, to avoid refetching an entry
                       %% from the local DNS resolver right before it
                       %% refreshes its own cache.
-                      {[ IPAddr | IPAddrAcc ], min(MinTTL, TTL + ?SUCCESS_CACHE_EXTRA_SECONDS)};
+                      TTLAdjusted = max(TTL + ?SUCCESS_CACHE_EXTRA_SECONDS, ?MIN_CACHE_SECONDS),
+                      TTLTS = Now + erlang:convert_time_unit(TTLAdjusted, second, native),
+                      {[ {IPAddr, TTLTS} | IPAddrAcc ], min(MinTTL, TTLAdjusted)};
                     _ ->
                       %% Ignore type=cname records in the answers.
                       {IPAddrAcc, MinTTL}
@@ -131,13 +138,59 @@ lookup_uncached (Host) ->
           case IPAddrs of
             [] -> %% Answer was empty or contained no A records.  Treat it like a failure.
                   {undefined, ?ERROR_CACHE_SECONDS};
-            _  -> {list_to_tuple(IPAddrs), max(TTL, min_cache_seconds())}
+            _  -> {IPAddrs, max(TTL, ?MIN_CACHE_SECONDS)}
           end;
         _Error ->
           %% Cache an error lookup for one second.
           {undefined, ?ERROR_CACHE_SECONDS}
       end
   end.
+
+
+-spec merge_addrs({list(ip_entry()), ttl()}, ip_addrs() | 'undefined', native_time()) -> {CachedOut::ip_addrs(), RefreshSecs::ttl()}.
+%% Merges a set of new DNS entries in `AddrsIn' into the cached DNS entries in
+%% `CachedIn' and drops expired entries to produce `CachedOut'.
+merge_addrs ({AddrsIn, TTLIn}, CachedIn, Now) ->
+  AddrsMap = maps:from_list(AddrsIn),
+  {AddrsOut, TTLType} =
+    case CachedIn of
+      undefined ->
+        %% There are no cached addresses because this is the first call.  Use
+        %% a short TTL.
+        {AddrsIn, short_ttl};
+      _ ->
+        %% Copy unexpired entries from the old cache into the new cache.  If
+        %% we have any carryovers, that's an indication that the DNS lookup is
+        %% giving us a subset of a larger set of IP addresses; in that case,
+        %% use a short TTL.
+        lists:foldl(
+          fun (CachedEntry={CachedAddr, CachedTS}, Acc={AddrsAcc, _TTLTypeAcc}) ->
+              %% Drop the cached entry if it is too old or is contained in the
+              %% new address list.  CachedTS may be 'infinity', which compares
+              %% greater than any integer.
+              case maps:is_key(CachedAddr, AddrsMap) of
+                true      -> Acc;
+                false ->
+                  case CachedTS > Now of
+                    true  -> {[ CachedEntry | AddrsAcc ], short_ttl};
+                    false -> {AddrsAcc, short_ttl}
+                  end
+              end
+          end, {AddrsIn, normal_ttl}, tuple_to_list(CachedIn))
+    end,
+  CachedOut = list_to_tuple(AddrsOut),
+
+  %% Heuristic to decide whether to us a short or long min TTL.  We use a
+  %% short TTL if we think that DNS is giving us one out of a larger set of IP
+  %% addresses for each lookup.  We use a long TTL if we think that the DNS
+  %% server is giving us all of the IP addresses.
+  TTLOut =
+    case TTLType of
+      short_ttl  -> ?DYNAMIC_REQUERY_SECONDS;
+      normal_ttl -> TTLIn
+    end,
+
+  {CachedOut, TTLOut}.
 
 
 -spec ets_insert_bounded(Tab::ets:tab(), Entry::term()) -> 'true'.
@@ -151,14 +204,6 @@ ets_insert_bounded(Tab, Entry) ->
     _                           -> ok
   end,
   ets:insert(Tab, Entry).
-
-
--spec min_cache_seconds() -> MinCacheSeconds::non_neg_integer().
-min_cache_seconds() ->
-  case application:get_env(lhttpc, dns_cache_min_cache_seconds) of
-    {ok, MinCacheSeconds} -> MinCacheSeconds;
-    _                     -> ?MIN_CACHE_SECONDS_DEFAULT
-  end.
 
 
 -spec count_success(Stats::dns_stats()|'undefined', Now::integer()) -> dns_stats().

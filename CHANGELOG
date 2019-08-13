@@ -1,3 +1,7 @@
+Version 1.12.0:
+* Add special handling to lhttpc_dns for providers that return a subset of a
+  larger pool of IP addresses in their DNS responses.
+
 Version 1.11.1:
 * The lhttpc_dns:check_table should not create the lhttpd_dns table if it
   doesn't exist.
