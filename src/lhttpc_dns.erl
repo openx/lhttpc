@@ -11,10 +11,32 @@
         ]).
 
 
+%% -include_lib("kernel/include/inet.hrl").
+
+
+-type expiration_ts() :: integer().
+
+%% -type ip_entry () :: {ip_address(), expiration_ts()}.
+%% -type ip_entry () :: inet:ip_address().
+
+-type dns_stats() :: { SuccessCount :: non_neg_integer()
+                     , FailureCount :: non_neg_integer()
+                     , FailuresSinceLastSuccessCount :: non_neg_integer()
+                     , SuccessTime :: integer() | 'undefined' }.
+
+-record(dns_rec,
+        { hostname :: inet:hostname()
+        , ip_addrs :: tuple()               % list_to_tuple(list(ip_entry())).
+        , expiration_ts :: expiration_ts()
+        , stats :: dns_stats()
+        }).
+
+
 init (_Args) ->
   create_table().
 
-choose_addr(IPAddrs) when is_tuple(IPAddrs) ->
+choose_addr (IPAddrs) when is_tuple(IPAddrs) ->
+  %% IPAddrs is a tuple each element of which is an ip_entry().
   %% We should round-robin through the IP addresses, but for now we
   %% just choose a random one.
   case size(IPAddrs) of
@@ -36,28 +58,16 @@ monotonic_time() ->
 -define(MIN_CACHE_SECONDS_DEFAULT, 300).
 -define(MAX_CACHE_SIZE, 10000).
 
--type lhttpc_dns_counts() :: { SuccessCount :: non_neg_integer()
-                             , FailureCount :: non_neg_integer()
-                             , FailuresSinceLastSuccessCount :: non_neg_integer()
-                             , SuccessTime :: integer() | 'undefined' }.
 
 -spec lookup(Host::string()) -> tuple() | 'undefined' | string().
 lookup (Host) ->
-  %% Attempt cache lookup.  Each row in the lhttpc_dns ets table has a tuple
-  %% of the form:
-  %%
-  %% { Hostname
-  %% , IPAddrTuple: tuple of one or more IP address tuples, or 'undefined'.
-  %% , CacheExpireTime: timestamp() when cache line expires.
-  %% , {SuccessCount, FailureCount, FailuresSinceLastSuccessCount, LastSuccessTime}
-  %% }
-  {WantRefresh, CachedIPAddrs, Now, CachedCounts} =
+  {WantRefresh, CachedIPAddrs, Now, CachedStats} =
     try ets:lookup(?MODULE, Host) of
       [] ->                                             % Not in cache.
         {true, undefined, lhttpc_dns:monotonic_time(), undefined};
-      [{_, IPAddrs0, Expiration, CachedCounts0}] ->     % Cached, maybe stale.
+      [ #dns_rec{ip_addrs=IPAddrs0, expiration_ts=ExpirationTS, stats=CachedStats0} ] ->      % Cached, maybe stale.
         Now0 = lhttpc_dns:monotonic_time(),
-        {Now0 >= Expiration, IPAddrs0, Now0, CachedCounts0}
+        {Now0 >= ExpirationTS, IPAddrs0, Now0, CachedStats0}
     catch
       error:badarg ->
         {fallback, undefined, undefined, undefined}
@@ -72,7 +82,7 @@ lookup (Host) ->
       choose_addr(CachedIPAddrs);
     true ->
       %% Cached lookup failed.  Perform lookup and cache results.
-      {{IPAddrs, TTL}, Counts} =
+      {{IPAddrs, TTL}, Stats} =
         case lhttpc_dns:lookup_uncached(Host) of
           FailureLookup = {undefined, _} ->
             %% If the lookup fails but we have a stale cached result, keep it.
@@ -81,20 +91,20 @@ lookup (Host) ->
                 undefined -> FailureLookup;
                 _         -> {CachedIPAddrs, min_cache_seconds()}
               end,
-            {UpdatedFailureLookup, count_failure(CachedCounts)};
+            {UpdatedFailureLookup, count_failure(CachedStats)};
           SuccessLookup ->
-            {SuccessLookup, count_success(CachedCounts, Now)}
+            {SuccessLookup, count_success(CachedStats, Now)}
         end,
-      ets_insert_bounded(?MODULE, {Host, IPAddrs, Now + erlang:convert_time_unit(TTL, seconds, native), Counts}),
+      ets_insert_bounded(?MODULE, #dns_rec{hostname = Host, ip_addrs = IPAddrs,
+                                           expiration_ts = Now + erlang:convert_time_unit(TTL, seconds, native),
+                                           stats = Stats}),
       choose_addr(IPAddrs)
   end.
 
 
 -spec lookup_uncached(Host::string()) -> {IPAddrs::tuple()|'undefined', CacheSeconds::non_neg_integer()}.
 lookup_uncached (Host) ->
-  %% inet_parse:address is not a public interface.  In R16B you can
-  %% call inet:parse_address instead.
-  case inet_parse:address(Host) of
+  case inet:parse_address(Host) of
     {ok, IPAddr} ->
       %% If Host looks like an IP address already, just return it.
       {{IPAddr}, ?MAX_CACHE_SECONDS};
@@ -151,14 +161,14 @@ min_cache_seconds() ->
   end.
 
 
--spec count_success(Counts::lhttpc_dns_counts()|'undefined', Now::integer()) -> lhttpc_dns_counts().
+-spec count_success(Stats::dns_stats()|'undefined', Now::integer()) -> dns_stats().
 count_success({SuccessCount, FailureCount, _FailuresSinceLastSuccessCount, _LastSuccessTime}, Now) ->
   {SuccessCount + 1, FailureCount, 0, Now};
 count_success(undefined, Now) ->
   {1, 0, 0, Now}.
 
 
--spec count_failure(Counts::lhttpc_dns_counts()|'undefined') -> lhttpc_dns_counts().
+-spec count_failure(Stats::dns_stats()|'undefined') -> dns_stats().
 count_failure({SuccessCount, FailureCount, FailuresSinceLastSuccessCount, LastSuccessTime}) ->
   {SuccessCount, FailureCount + 1, FailuresSinceLastSuccessCount + 1, LastSuccessTime};
 count_failure(undefined) ->
@@ -166,7 +176,8 @@ count_failure(undefined) ->
 
 
 create_table() ->
-  ets:new(?MODULE, [ set, public, named_table, {read_concurrency, true}, {write_concurrency, true} ]).
+  ets:new(?MODULE, [ set, public, named_table, {keypos, #dns_rec.hostname}
+                   , {read_concurrency, true}, {write_concurrency, true} ]).
 
 destroy_table() ->
   ets:delete(?MODULE).
