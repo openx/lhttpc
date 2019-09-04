@@ -1,3 +1,6 @@
+Version 1.13.0
+* Set the SNI (server name indication) TLS extension for SSL connections.
+
 Version 1.12.0:
 * Add special handling to lhttpc_dns for providers that return a subset of a
   larger pool of IP addresses in their DNS responses.

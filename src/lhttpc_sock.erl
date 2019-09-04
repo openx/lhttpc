@@ -65,7 +65,11 @@ connect(Host, Port, Options, Timeout, true) ->
         IpAddr ->
             %% Avoid port leak with potential race condition in case of timeout
             Flag = process_flag(trap_exit, true),
-            Res = ssl:connect(IpAddr, Port, Options, Timeout),
+            OptionsWithSNI = case lists:keymember(server_name_indication, 1, Options) of
+                                 true  -> Options;
+                                 false -> [ {server_name_indication, Host} | Options ]
+                             end,
+            Res = ssl:connect(IpAddr, Port, OptionsWithSNI, Timeout),
             receive
                 {'EXIT', _Pid, timeout} -> exit(timeout)
             after 0 ->
