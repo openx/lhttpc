@@ -1,3 +1,7 @@
+Version 1.14.0
+* More lhttpc_dns heuristic changes for when the DNS resolver returns
+  different subsets of a larger set of IP addresses on each lookup.
+
 Version 1.13.0
 * Set the SNI (server name indication) TLS extension for SSL connections.
 

@@ -8,6 +8,9 @@
         , lookup/1
         , lookup_uncached/1
         , monotonic_time/0
+        , print_cache/0
+        , print_cache/1
+        , print_tcpdump_hosts/1
         ]).
 
 
@@ -56,11 +59,14 @@ monotonic_time() ->
 
 -define(ERROR_CACHE_SECONDS, 1).
 -define(SUCCESS_CACHE_EXTRA_SECONDS, 2).
--define(MAX_CACHE_SECONDS, (3600 * 24)).
--define(MIN_CACHE_SECONDS, 60).
--define(DYNAMIC_REQUERY_SECONDS, 5).
+-define(MAX_CACHE_SECONDS, 3600).
+-define(MIN_CACHE_SECONDS, 30).
+-define(DYNAMIC_REQUERY_SECONDS, 4).
 -define(MAX_CACHE_SIZE, 10000).
 
+
+-define(TTL_TO_TS(TTL, Now), Now + erlang:convert_time_unit(TTL, seconds, native)).
+-define(TS_TO_TTL(TS, Now), if is_integer(TS) -> erlang:convert_time_unit(TS - Now, native, seconds); true -> TS end).
 
 -spec lookup(inet:hostname()) -> tuple() | 'undefined' | inet:hostname().
 lookup (Host) ->
@@ -85,14 +91,14 @@ lookup (Host) ->
       choose_addr(CachedIPAddrs);
     true ->
       %% Cached lookup failed.  Perform lookup and cache results.
-      {{IPAddrs, TTL}, Stats} =
+      {{IPAddrs, RefreshTS}, Stats} =
         case lhttpc_dns:lookup_uncached(Host) of
-          FailureLookup = {undefined, _} ->
+          {undefined, FailureTTL} ->
             %% If the lookup fails but we have a stale cached result, keep it.
             UpdatedFailureLookup =
               case CachedIPAddrs of
-                undefined -> FailureLookup;
-                _         -> {CachedIPAddrs, ?MIN_CACHE_SECONDS}
+                undefined -> {undefined, ?TTL_TO_TS(FailureTTL, Now)};
+                _         -> {CachedIPAddrs, ?TTL_TO_TS(?MIN_CACHE_SECONDS, Now)}
               end,
             {UpdatedFailureLookup, count_failure(CachedStats)};
           SuccessLookup ->
@@ -100,7 +106,7 @@ lookup (Host) ->
             {MergedLookup, count_success(CachedStats, Now)}
         end,
       ets_insert_bounded(?MODULE, #dns_rec{hostname = Host, ip_addrs = IPAddrs,
-                                           expiration_time = Now + erlang:convert_time_unit(TTL, seconds, native),
+                                           expiration_time = RefreshTS,
                                            stats = Stats}),
       choose_addr(IPAddrs)
   end.
@@ -128,7 +134,7 @@ lookup_uncached (Host) ->
                       %% from the local DNS resolver right before it
                       %% refreshes its own cache.
                       TTLAdjusted = max(TTL + ?SUCCESS_CACHE_EXTRA_SECONDS, ?MIN_CACHE_SECONDS),
-                      TTLTS = Now + erlang:convert_time_unit(TTLAdjusted, second, native),
+                      TTLTS = Now + erlang:convert_time_unit(TTLAdjusted, seconds, native),
                       {[ {IPAddr, TTLTS} | IPAddrAcc ], min(MinTTL, TTLAdjusted)};
                     _ ->
                       %% Ignore type=cname records in the answers.
@@ -147,50 +153,67 @@ lookup_uncached (Host) ->
   end.
 
 
--spec merge_addrs({list(ip_entry()), ttl()}, ip_addrs() | 'undefined', native_time()) -> {CachedOut::ip_addrs(), RefreshSecs::ttl()}.
+-spec merge_addrs({list(ip_entry()), ttl()}, ip_addrs() | 'undefined', native_time()) -> {CachedOut::ip_addrs(), RefreshTS::native_time()}.
 %% Merges a set of new DNS entries in `AddrsIn' into the cached DNS entries in
 %% `CachedIn' and drops expired entries to produce `CachedOut'.
-merge_addrs ({AddrsIn, TTLIn}, CachedIn, Now) ->
-  AddrsMap = maps:from_list(AddrsIn),
-  {AddrsOut, TTLType} =
+merge_addrs ({AddrsIn, _TTLIn}, CachedIn, Now) ->
+  AddrsInMap = maps:from_list(AddrsIn),
+  {AddrsOutMap, TTLType} =
     case CachedIn of
       undefined ->
         %% There are no cached addresses because this is the first call.  Use
         %% a short TTL.
-        {AddrsIn, short_ttl};
+        {AddrsInMap, short_ttl};
       _ ->
         %% Copy unexpired entries from the old cache into the new cache.  If
         %% we have any carryovers, that's an indication that the DNS lookup is
         %% giving us a subset of a larger set of IP addresses; in that case,
         %% use a short TTL.
         lists:foldl(
-          fun (CachedEntry={CachedAddr, CachedTS}, Acc={AddrsAcc, _TTLTypeAcc}) ->
-              %% Drop the cached entry if it is too old or is contained in the
-              %% new address list.  CachedTS may be 'infinity', which compares
-              %% greater than any integer.
-              case maps:is_key(CachedAddr, AddrsMap) of
-                true      -> Acc;
-                false ->
+          fun ({CachedAddr, CachedTS}, Acc={AddrsAcc, TTLTypeAcc}) ->
+              case maps:get(CachedAddr, AddrsAcc, undefined) of
+                undefined ->
+                  %% The cached entry was not found in the new address list.
+                  %% Keep it if it isn't too old.  Use a short TTL.  CachedTS
+                  %% may be 'infinity', which compares greater than any
+                  %% integer.
                   case CachedTS > Now of
-                    true  -> {[ CachedEntry | AddrsAcc ], short_ttl};
-                    false -> {AddrsAcc, short_ttl}
+                    true        -> {maps:put(CachedAddr, CachedTS, AddrsAcc), short_ttl};
+                    false       -> {AddrsAcc, short_ttl}
+                  end;
+                NewTS ->
+                  %% The cached entry was found in the new address list.  If
+                  %% use the greater of the cached TTL and the new TTL for the
+                  %% entry's TTL.
+                  case CachedTS > NewTS of
+                    true        -> {maps:put(CachedAddr, CachedTS, AddrsAcc), TTLTypeAcc};
+                    false       -> Acc
                   end
               end
-          end, {AddrsIn, normal_ttl}, tuple_to_list(CachedIn))
+          end, {AddrsInMap, normal_ttl}, tuple_to_list(CachedIn))
     end,
-  CachedOut = list_to_tuple(AddrsOut),
+  AddrsOut = maps:to_list(AddrsOutMap),
 
   %% Heuristic to decide whether to us a short or long min TTL.  We use a
   %% short TTL if we think that DNS is giving us one out of a larger set of IP
   %% addresses for each lookup.  We use a long TTL if we think that the DNS
-  %% server is giving us all of the IP addresses.
-  TTLOut =
+  %% server is giving us all of the IP addresses.  We use less than the DNS
+  %% TTL in the long TTL case because we want to collect IPs from multiple DNS
+  %% lookups.
+  TSOut =
     case TTLType of
-      short_ttl  -> ?DYNAMIC_REQUERY_SECONDS;
-      normal_ttl -> TTLIn
+      short_ttl  -> ?TTL_TO_TS(?DYNAMIC_REQUERY_SECONDS, Now);
+      normal_ttl -> max(min_ttl_ts(AddrsOut, ?TTL_TO_TS(?MAX_CACHE_SECONDS, Now)),
+                        ?TTL_TO_TS(?DYNAMIC_REQUERY_SECONDS, Now))
     end,
 
-  {CachedOut, TTLOut}.
+  {list_to_tuple(AddrsOut), TSOut}.
+
+
+-spec min_ttl_ts(list(ip_entry()), integer()) -> integer().
+min_ttl_ts ([ {_, infinity} | Rest ], MinTTL) -> min_ttl_ts(Rest, MinTTL);
+min_ttl_ts ([ {_, TTL} | Rest ], MinTTL) -> min_ttl_ts(Rest, min(TTL, MinTTL));
+min_ttl_ts ([], MinTTL) -> MinTTL.
 
 
 -spec ets_insert_bounded(Tab::ets:tab(), Entry::term()) -> 'true'.
@@ -204,6 +227,40 @@ ets_insert_bounded(Tab, Entry) ->
     _                           -> ok
   end,
   ets:insert(Tab, Entry).
+
+
+%% Prints the contents of the DNS cache in a human readable format.
+print_cache () ->
+  Now = lhttpc_dns:monotonic_time(),
+  lists:foreach(fun (Entry) -> print_cache_entry(Entry, Now) end, ets:tab2list(?MODULE)).
+
+%% Prints the DNS cache entry for `Hostname' in a human readable format.
+print_cache (Hostname) ->
+  Now = lhttpc_dns:monotonic_time(),
+  case ets:lookup(?MODULE, Hostname) of
+    [Entry=#dns_rec{}] -> print_cache_entry(Entry, Now);
+    _                  -> ok
+  end.
+
+print_cache_entry (#dns_rec{hostname=Hostname, ip_addrs=IPAddrs, expiration_time=ExpirationTime, stats={S, F, FS, STS}}, Now) ->
+  IPAddrsIOList = [ io_lib:format("  ~s ~p\n", [ inet:ntoa(IPAddr), ?TS_TO_TTL(TS, Now) ]) || {IPAddr, TS} <- tuple_to_list(IPAddrs) ],
+  io:format("~s ttl: ~p sec (~p)\n~s  successes: ~p; failures: ~p; failures_since_last_success: ~p; success_time: ~p sec_ago\n",
+            [ Hostname, ?TS_TO_TTL(ExpirationTime, Now), ExpirationTime - Now
+            , IPAddrsIOList
+            , S, F, FS, ?TS_TO_TTL(Now, STS)
+            ]).
+
+
+%% Prints the contents of the DNS cache in the tcpdump "host" expression.
+%%
+%% This is useful when lhttpc is using a larger set of IP addresses than are
+%% returned by a single DNS lookup.
+print_tcpdump_hosts (Hostname) ->
+  case ets:lookup(?MODULE, Hostname) of
+    [#dns_rec{ip_addrs=IPAddrs}] ->
+      io:format("host \\( ~s \\)\n", [ lists:join(" or ", [ inet:ntoa(IPAddr) || {IPAddr, _} <- tuple_to_list(IPAddrs) ]) ]);
+    _ -> ok
+  end.
 
 
 -spec count_success(Stats::dns_stats()|'undefined', Now::integer()) -> dns_stats().
@@ -235,3 +292,52 @@ check_table () ->
     undefined -> {table_missing, 0};
     N         -> {ok, N}
   end.
+
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+
+min_ttl_test () ->
+  Addr = {0, 1, 2, 3},
+  ?assertEqual(100, min_ttl_ts([], 100)),
+  ?assertEqual(100, min_ttl_ts([ {Addr, 101}, {Addr, 102} ], 100)),
+  ?assertEqual(99, min_ttl_ts([ {Addr, 99}, {Addr, 101} ], 100)),
+  ?assertEqual(99, min_ttl_ts([ {Addr, 101}, {Addr, 99} ], 100)),
+  ?assertEqual(99, min_ttl_ts([ {Addr, infinity}, {Addr, 99} ], 100)),
+  ?assertEqual(100, min_ttl_ts([ {Addr, 101}, {Addr, infinity} ], 100)),
+  ok.
+
+%% Make a dummy ip_entry.
+-define(A(N, TTL), {{N, N, N, N}, TTL}).
+
+merge_addrs_test () ->
+  TS0 = 0,
+  DynamicTS0 = ?TTL_TO_TS(?DYNAMIC_REQUERY_SECONDS, TS0),
+
+  ?assertMatch(
+     {{?A(1, 300)}, DynamicTS0},
+     merge_addrs({[ ?A(1, 300) ], 1}, undefined, TS0)),
+  %% Keep the max TTL.
+  ?assertMatch(
+     {{?A(1, 300)}, _},
+     merge_addrs({[ ?A(1, 300) ], 1}, {?A(1, 200)}, TS0)),
+  ?assertMatch(
+     {{?A(1, 400)}, _},
+     merge_addrs({[ ?A(1, 300) ], 1}, {?A(1, 400)}, TS0)),
+  ?assertMatch(
+     {{?A(1, 400)}, _},
+     merge_addrs({[ ?A(1, 300) ], 1}, {?A(1, 400)}, TS0)),
+
+  TS200 = 200,
+  DynamicTS200 = ?TTL_TO_TS(?DYNAMIC_REQUERY_SECONDS, TS200),
+
+  %% Short vs long TTL, don't keep cache.
+  ?assertMatch(
+     {{?A(2, 300)}, DynamicTS200},
+     merge_addrs({[ ?A(2, 300) ], 1}, {?A(1, 100)}, TS200)),
+  %% Short vs long TTL, keep cache.
+  ?assertMatch(
+     {{?A(1, 250), ?A(2, 300)}, DynamicTS200},
+     merge_addrs({[ ?A(2, 300) ], 1}, {?A(1, 250)}, TS200)),
+  ok.
+
+-endif. %% TEST

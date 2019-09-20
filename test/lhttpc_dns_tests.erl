@@ -78,15 +78,19 @@ test_lookup () ->
 
   %% Verify that IP address caching is working.
   ?assertEqual(?SINGLE, lhttpc_dns:lookup("single.com")),
+  lhttpc_dns:print_cache("single.com"),
   ?assertEqual(1, meck:num_calls(lhttpc_dns, lookup_uncached, [ "single.com" ])),
   erlang:put(dns_ts, 60),
   ?assertEqual(?SINGLE, lhttpc_dns:lookup("single.com")),
   ?assertEqual(2, meck:num_calls(lhttpc_dns, lookup_uncached, [ "single.com" ])),
+  lhttpc_dns:print_cache("single.com"),
   erlang:put(dns_ts, 70),
   ?assertEqual(?SINGLE, lhttpc_dns:lookup("single.com")),
+  lhttpc_dns:print_cache("single.com"),
   ?assertEqual(2, meck:num_calls(lhttpc_dns, lookup_uncached, [ "single.com" ])),
   erlang:put(dns_ts, 2400),
   ?assertEqual(?SINGLE, lhttpc_dns:lookup("single.com")),
+  lhttpc_dns:print_cache("single.com"),
   ?assertEqual(3, meck:num_calls(lhttpc_dns, lookup_uncached, [ "single.com" ])),
 
   %% When a hostname has multiple IP addresses, a random one is returned.
