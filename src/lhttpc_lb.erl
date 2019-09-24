@@ -115,6 +115,7 @@ init(Config=#config{host=Host, port=Port, ssl=Ssl}) ->
     end.
 
 handle_call({checkout, Pid, MaxConn, ConnLifetime}, _From, S0=#state{free=[], clients=Tid}) ->
+    %% Update the state if this call updates the max_conn or conn_lifetime.
     S1 = case S0#state.config of
              #config{max_conn=MaxConn, conn_lifetime=ConnLifetime} -> S0;
              StaleConfig -> S0#state{config = StaleConfig#config{max_conn = MaxConn, conn_lifetime = ConnLifetime}}
@@ -125,8 +126,11 @@ handle_call({checkout, Pid, MaxConn, ConnLifetime}, _From, S0=#state{free=[], cl
             %% We don't have an open socket, but the client can open one.
             Expire =
                 case ConnLifetime of
-                    infinity     -> undefined;
-                    ConnLifetime -> erlang:monotonic_time() + erlang:convert_time_unit(ConnLifetime, milli_seconds, native)
+                    infinity -> undefined;
+                    _        -> CLNative = erlang:convert_time_unit(ConnLifetime, milli_seconds, native),
+                                %% Add 20% jitter to connection lifetime.
+                                CLNativeJitter = CLNative + rand:uniform(CLNative div 5),
+                                erlang:monotonic_time() + CLNativeJitter
                 end,
             add_client(Tid, Pid, #conn_info{request_count = 1, expire = Expire}),
             {reply, no_socket, S1};
@@ -135,6 +139,7 @@ handle_call({checkout, Pid, MaxConn, ConnLifetime}, _From, S0=#state{free=[], cl
     end;
 handle_call({checkout, Pid, MaxConn, ConnLifetime}, _From,
             S0=#state{free=[#conn_free{socket=Taken, timer_ref=Timer, conn_info=ConnInfo} | Free], clients=Tid, config=#config{ssl=Ssl}}) ->
+    %% Update the state if this call updates the max_conn or conn_lifetime.
     S1 = case S0#state.config of
              #config{max_conn=MaxConn, conn_lifetime=ConnLifetime} -> S0;
              StaleConfig -> S0#state{config = StaleConfig#config{max_conn = MaxConn, conn_lifetime = ConnLifetime}}
