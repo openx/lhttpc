@@ -1,3 +1,7 @@
+Version 1.14.2
+* Update lhttpc_dns:print_tcpdump_hosts/1 output to remove unnecessary
+  backslashes.
+
 Version 1.14.1
 * Add 20% jitter to connection_lifetime.
 

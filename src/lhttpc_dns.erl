@@ -258,7 +258,7 @@ print_cache_entry (#dns_rec{hostname=Hostname, ip_addrs=IPAddrs, expiration_time
 print_tcpdump_hosts (Hostname) ->
   case ets:lookup(?MODULE, Hostname) of
     [#dns_rec{ip_addrs=IPAddrs}] ->
-      io:format("host \\( ~s \\)\n", [ lists:join(" or ", [ inet:ntoa(IPAddr) || {IPAddr, _} <- tuple_to_list(IPAddrs) ]) ]);
+      io:format("host ( ~s )\n", [ lists:join(" or ", [ inet:ntoa(IPAddr) || {IPAddr, _} <- tuple_to_list(IPAddrs) ]) ]);
     _ -> ok
   end.
 
