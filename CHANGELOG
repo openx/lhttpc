@@ -1,3 +1,6 @@
+Version 1.14.3
+* Fix handling of URLs with query with empty path.
+
 Version 1.14.2
 * Update lhttpc_dns:print_tcpdump_hosts/1 output to remove unnecessary
   backslashes.

@@ -130,9 +130,9 @@ split_port(http, [$/ | _] = Path, []) ->
 split_port(https, [$/ | _] = Path, []) ->
     {443, Path};
 split_port(http, [$? | _] = Path, []) ->
-    {80, Path};
+    {80, [$/ | Path]};
 split_port(https, [$? | _] = Path, []) ->
-    {443, Path};
+    {443, [$/ | Path]};
 split_port(http, [], []) ->
     {80, "/"};
 split_port(https, [], []) ->
@@ -142,7 +142,7 @@ split_port(_, [], Port) ->
 split_port(_,[$/ | _] = Path, Port) ->
     {list_to_integer(lists:reverse(Port)), Path};
 split_port(_,[$? | _] = Path, Port) ->
-    {list_to_integer(lists:reverse(Port)), Path};
+    {list_to_integer(lists:reverse(Port)), [$/ | Path]};
 split_port(Scheme, [P | T], Port) ->
     split_port(Scheme, T, [P | Port]).
 
