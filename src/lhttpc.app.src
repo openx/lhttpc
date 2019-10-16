@@ -36,7 +36,6 @@
   {mod, {lhttpc, []}},
   {env, [{connection_timeout, 300000},
          {stats, false},
-         {dns_cache, true},
-         {dns_cache_min_cache_seconds, 300}]}
+         {dns_cache, true}]}
  ]}.
 
