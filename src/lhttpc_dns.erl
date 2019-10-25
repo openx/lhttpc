@@ -21,19 +21,23 @@
 -type ttl() :: pos_integer().
 
 -type ip_entry () :: {inet:ip_address(), native_time() | 'infinity'}.
-%% Tuple of any length is OK, but 2 is enough to satisfy dialyzer.
+%% Tuple of any length greater than 1 is OK, but 2 is enough to satisfy dialyzer.
 -type ip_addrs () :: {ip_entry()} | {ip_entry(), ip_entry()}.
 
--type dns_stats() :: { SuccessCount :: non_neg_integer()
-                     , FailureCount :: non_neg_integer()
-                     , FailuresSinceLastSuccessCount :: non_neg_integer()
-                     , SuccessTime :: integer() | 'undefined' }.
+-record(dns_stats,
+        { success_count = 0 :: non_neg_integer()
+        , failure_count = 0 :: non_neg_integer()
+        , failures_since_last_success_count = 0 :: non_neg_integer()
+        , success_time :: native_time() | 'undefined'
+        }).
+
+-type dns_stats() :: #dns_stats{}.
 
 -record(dns_rec,
         { hostname :: inet:hostname()
-        , ip_addrs :: ip_addrs()            % list_to_tuple(list(ip_entry())).
+        , ip_addrs :: ip_addrs() | 'undefined'
         , expiration_time :: native_time()
-        , stats :: dns_stats()
+        , stats = #dns_stats{} :: dns_stats()
         }).
 
 
@@ -242,12 +246,19 @@ print_cache (Hostname) ->
     _                  -> ok
   end.
 
-print_cache_entry (#dns_rec{hostname=Hostname, ip_addrs=IPAddrs, expiration_time=ExpirationTime, stats={S, F, FS, STS}}, Now) ->
-  IPAddrsIOList = [ io_lib:format("  ~s ~p\n", [ inet:ntoa(IPAddr), ?TS_TO_TTL(TS, Now) ]) || {IPAddr, TS} <- tuple_to_list(IPAddrs) ],
-  io:format("~s ttl: ~p sec (~p)\n~s  successes: ~p; failures: ~p; failures_since_last_success: ~p; success_time: ~p sec_ago\n",
-            [ Hostname, ?TS_TO_TTL(ExpirationTime, Now), ExpirationTime - Now
+print_cache_entry (#dns_rec{hostname=Hostname, ip_addrs=IPAddrs, expiration_time=ExpirationTime, stats=Stats}, Now) ->
+  {IPAddrsIOList, IPAddrsCount} =
+    case IPAddrs of
+      undefined -> {[], 0};
+      _         -> {[ io_lib:format("  ~s ~p\n", [ inet:ntoa(IPAddr), ?TS_TO_TTL(TS, Now) ])
+                      || {IPAddr, TS} <- lists:sort(tuple_to_list(IPAddrs)) ],
+                    size(IPAddrs)}
+    end,
+  io:format("~s ttl: ~p sec (~p); count: ~p\n  successes: ~p; failures: ~p; failures_since_last_success: ~p; success_time: ~p sec_ago\n~s",
+            [ Hostname, ?TS_TO_TTL(ExpirationTime, Now), ExpirationTime - Now, IPAddrsCount
+            , Stats#dns_stats.success_count, Stats#dns_stats.failure_count, Stats#dns_stats.failures_since_last_success_count
+            , ?TS_TO_TTL(Now, Stats#dns_stats.success_time)
             , IPAddrsIOList
-            , S, F, FS, ?TS_TO_TTL(Now, STS)
             ]).
 
 
@@ -264,17 +275,17 @@ print_tcpdump_hosts (Hostname) ->
 
 
 -spec count_success(Stats::dns_stats()|'undefined', Now::integer()) -> dns_stats().
-count_success({SuccessCount, FailureCount, _FailuresSinceLastSuccessCount, _LastSuccessTime}, Now) ->
-  {SuccessCount + 1, FailureCount, 0, Now};
-count_success(undefined, Now) ->
-  {1, 0, 0, Now}.
+count_success (Stats=#dns_stats{success_count=SuccessCount}, Now) ->
+  Stats#dns_stats{success_count = SuccessCount + 1, failures_since_last_success_count = 0, success_time = Now};
+count_success (undefined, Now) ->
+  #dns_stats{success_count = 1, success_time = Now}.
 
 
 -spec count_failure(Stats::dns_stats()|'undefined') -> dns_stats().
-count_failure({SuccessCount, FailureCount, FailuresSinceLastSuccessCount, LastSuccessTime}) ->
-  {SuccessCount, FailureCount + 1, FailuresSinceLastSuccessCount + 1, LastSuccessTime};
-count_failure(undefined) ->
-  {0, 1, 1, undefined}.
+count_failure (Stats=#dns_stats{failure_count=FailureCount, failures_since_last_success_count=FailuresSinceLastSuccessCount}) ->
+  Stats#dns_stats{failure_count = FailureCount + 1, failures_since_last_success_count = FailuresSinceLastSuccessCount + 1};
+count_failure (undefined) ->
+  #dns_stats{failure_count = 1, failures_since_last_success_count = 1}.
 
 
 create_table() ->
