@@ -345,6 +345,18 @@ request(URL, Method, Hdrs, Body, Timeout, Options) ->
 %% specifies the maximum lifetime of the socket.  The default value is
 %% `infinity'.
 %%
+%% `{stream_to, Pid}' specifies that instead of the normal behavior in which
+%% the `lhttpc:request' call blocks until the remote server responds and
+%% returns the response as its return value, the `lhttpc:request' call will
+%% return immediately and the response will be sent to the process Pid as a
+%% message.  If the `stream_to' option is given, the `lhttpc:request' call
+%% will return `{ReqId, ChildPid}' where ReqId is a unique reference that will
+%% be used in the response and ChildPid is the pid of the process that was
+%% started to handle the request.  The message that is sent will have the
+%% format `{response, ReqId, ChildPid, Response}' where Response is the tuple
+%% that the `lhttpc:request' call would have returned if the `stream_to'
+%% option had not been given.
+%%
 %% @end
 -spec request(string(), 1..65535, true | false, string(), atom() | string(),
     headers(), iodata(), pos_integer(), [option()]) -> result().
