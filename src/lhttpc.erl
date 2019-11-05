@@ -357,23 +357,38 @@ request(URL, Method, Hdrs, Body, Timeout, Options) ->
 %% that the `lhttpc:request' call would have returned if the `stream_to'
 %% option had not been given.
 %%
+%% `{stats_fun, StatsFun}' specifies a function that will be called when a
+%% request is complete.  The first argument to the call will be the atom
+%% `normal', `timeout', or `error' and the second argument will be the
+%% response time for the call in native time units.  This option can be useful
+%% when using the `stream_to' when the Pid to receive the response may no
+%% longer exist by the time the response is received.  WARNING: The signature
+%% of the StatsFun is likely to change in the future.
+
 %% @end
 -spec request(string(), 1..65535, true | false, string(), atom() | string(),
     headers(), iodata(), pos_integer(), [option()]) -> result().
 request(Host, Port, Ssl, Path, Method, Hdrs, Body, Timeout, Options) ->
     verify_options(Options, []),
     ReqId = make_ref(),
+    StatsState =
+        case lists:keyfind(stats_fun, 1, Options) of
+            {_, StatsFun} -> #lhttpc_stats_state{stats_fun = StatsFun, start_time = erlang:monotonic_time()};
+            false         -> undefined
+        end,
     case lists:keyfind(stream_to, 1, Options) of
         {_, StreamTo} ->
-            Args = [ReqId, StreamTo, Host, Port, Ssl, Path, Method, Hdrs, Body, Options],
+            Args = [ReqId, StreamTo, Host, Port, Ssl, Path, Method, Hdrs, Body, StatsState, Options],
             Pid = spawn(lhttpc_client, request, Args),
             spawn(fun() ->
+                %% kill_client_after only returns if the request times out.
                 R = kill_client_after(Pid, Timeout),
-                StreamTo ! {response, ReqId, Pid, R}
+                StreamTo ! {response, ReqId, Pid, R},
+                lhttpc_client:stats_call(StatsState, timeout)
             end),
             {ReqId, Pid};
         false ->
-            Args = [ReqId, self(), Host, Port, Ssl, Path, Method, Hdrs, Body, Options],
+            Args = [ReqId, self(), Host, Port, Ssl, Path, Method, Hdrs, Body, StatsState, Options],
             Pid = spawn_link(lhttpc_client, request, Args),
             receive
                 {response, ReqId, Pid, R} ->
@@ -384,11 +399,12 @@ request(Host, Port, Ssl, Path, Method, Hdrs, Body, Timeout, Options) ->
                     % caught by the caller.
                     exit(Reason);
                 {'EXIT', Pid, Reason} ->
-                    % This could happen if the process we're running in taps exits
+                    % This could happen if the process we're running in traps exits
                     % and the client process exits due to some exit signal being
                     % sent to it. Very unlikely though
                     exit(Reason)
             after Timeout ->
+                lhttpc_client:stats_call(StatsState, timeout),
                 kill_client(Pid)
             end
     end.
@@ -627,6 +643,8 @@ verify_options([{connect_options, List} | Options], Errors)
         when is_list(List) ->
     verify_options(Options, Errors);
 verify_options([{stream_to, Pid} | Options], Errors) when is_pid(Pid) ->
+    verify_options(Options, Errors);
+verify_options([{stats_fun, Fun} | Options], Errors) when is_function(Fun, 2) ->
     verify_options(Options, Errors);
 verify_options([Option | Options], Errors) ->
     verify_options(Options, [Option | Errors]);

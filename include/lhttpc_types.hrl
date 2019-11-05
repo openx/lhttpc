@@ -29,6 +29,8 @@
 
 -type socket() :: _.
 
+-type stats_fun() :: fun(('normal'|'timeout'|'error', non_neg_integer()) -> term()).
+
 -type option() ::
         {connect_options, list()} |
         {connect_timeout, timeout()} |
@@ -38,6 +40,7 @@
         {max_connections, non_neg_integer()} |
         {send_retry, non_neg_integer()} |
         {stream_to, pid()} |
+        {stats_fun, stats_fun()} |
         {partial_upload, non_neg_integer() | infinity} |
         {partial_download, list({window_size, integer()} |
                                 {part_size, integer() | infinity})}.
@@ -50,3 +53,5 @@
 
 -type window_size() :: non_neg_integer() | infinity.
 
+-record(lhttpc_stats_state, {stats_fun :: stats_fun(), start_time :: integer()}).
+-type lhttpc_stats_state() :: #lhttpc_stats_state{} | 'undefined'.

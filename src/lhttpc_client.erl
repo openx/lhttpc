@@ -31,7 +31,7 @@
 %%% not be called directly since it should be spawned by the lhttpc module.
 -module(lhttpc_client).
 
--export([request/10]).
+-export([request/11, stats_call/2]).
 
 -include("lhttpc_types.hrl").
 
@@ -59,8 +59,8 @@
     }).
 
 -spec request(term(), pid(), string(), 1..65535, true | false, string(),
-        string() | atom(), headers(), iodata(), [option()]) -> no_return().
-%% @spec (ReqId, From, Host, Port, Ssl, Path, Method, Hdrs, RequestBody, Options) -> ok
+        string() | atom(), headers(), iodata(), lhttpc_stats_state(), [option()]) -> no_return().
+%% @spec (ReqId, From, Host, Port, Ssl, Path, Method, Hdrs, RequestBody, StatsFun, Options) -> ok
 %%    ReqId = term()
 %%    From = pid()
 %%    Host = string()
@@ -70,10 +70,11 @@
 %%    Hdrs = [Header]
 %%    Header = {string() | atom(), string()}
 %%    Body = iodata()
+%%    StatsState = lhttpc_stats_state()
 %%    Options = [Option]
 %%    Option = {connect_timeout, Milliseconds}
 %% @end
-request(ReqId, From, Host, Port, Ssl, Path, Method, Hdrs, Body, Options) ->
+request(ReqId, From, Host, Port, Ssl, Path, Method, Hdrs, Body, StatsState, Options) ->
     Result = try
         execute(ReqId, From, Host, Port, Ssl, Path, Method, Hdrs, Body, Options)
     catch
@@ -84,6 +85,7 @@ request(ReqId, From, Host, Port, Ssl, Path, Method, Hdrs, Body, Options) ->
         error:Error ->
             {exit, ReqId, self(), {Error, erlang:get_stacktrace()}}
     end,
+    stats_call(StatsState, case Result of {_, _, _, {ok, _}} -> normal; _ -> error end),
     case Result of
         {response, _, _, {ok, {no_return, _}}} -> ok;
         _Else                               -> From ! Result
@@ -92,6 +94,10 @@ request(ReqId, From, Host, Port, Ssl, Path, Method, Hdrs, Body, Options) ->
     % calling us is trapping exits
     unlink(From),
     ok.
+
+stats_call(undefined, _) -> ok;
+stats_call(#lhttpc_stats_state{stats_fun=StatsFun, start_time=StartTime}, ResultType) ->
+    StatsFun(ResultType, erlang:monotonic_time() - StartTime).
 
 execute(ReqId, From, Host, Port, Ssl, Path, Method, Hdrs, Body, Options) ->
     UploadWindowSize = proplists:get_value(partial_upload, Options),

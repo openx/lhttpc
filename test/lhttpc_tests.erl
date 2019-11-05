@@ -167,7 +167,8 @@ tcp_test_() ->
                 ?_test(partial_download_smallish_chunks()),
                 ?_test(partial_download_slow_chunks()),
                 ?_test(close_connection()),
-                ?_test(message_queue())
+                ?_test(message_queue()),
+                ?_test(stats_fun_option())
                 %% ?_test(connection_count()) % just check that it's 0 (last)
             ]}
     }.
@@ -723,6 +724,42 @@ ssl_chunked() ->
             headers(SecondResponse))),
     ?assertEqual("2", lhttpc_lib:header_value("Trailer-2",
             headers(SecondResponse))).
+
+stats_fun_option() ->
+    StatsTab = ets:new(stats, [ public ]),
+    StatsFun =
+        fun (Type, Time) ->
+                ets:update_counter(StatsTab, Type, Time, {Type, 0})
+        end,
+    Options = [{stats_fun, StatsFun}],
+
+    %% Derived from simple(get).
+    Port0 = start(gen_tcp, [fun simple_response/5]),
+    URL0 = url(Port0, "/simple"),
+    ?assertMatch({ok, _}, lhttpc:request(URL0, "GET", [], <<>>, 1000, Options)),
+    ?assertMatch([{normal, T0}] when T0 > 0, ets:tab2list(StatsTab)),
+    ets:delete_all_objects(StatsTab),
+
+    %% Derived from request_timeout().
+    Port1 = start(gen_tcp, [fun very_slow_response/5]),
+    URL1 = url(Port1, "/request_timeout"),
+    ?assertEqual({error, timeout}, lhttpc:request(URL1, "GET", [], <<>>, 50, Options)),
+    ?assertMatch([{timeout, T1}] when T1 > 50 * 1000000, ets:tab2list(StatsTab)),
+    ets:delete_all_objects(StatsTab),
+
+    %% Derived from close_connection().
+    Port2 = start(gen_tcp, [fun close_connection/5]),
+    URL2 = url(Port2, "/close"),
+    ?assertEqual({error, connection_closed}, lhttpc:request(URL2, "GET", [], <<>>, 1000, Options)),
+    ?assertMatch([{error, T2}] when T2 > 0, ets:tab2list(StatsTab)),
+    ets:delete_all_objects(StatsTab),
+
+    URL3 = url(9999, "/error"),
+    ?assertExit({econnrefused, _}, lhttpc:request(URL3, "GET", [], <<>>, 50, [{stats_fun, StatsFun}])),
+    ?assertMatch([{error, T3}] when T3 > 0, ets:tab2list(StatsTab)),
+    ets:delete_all_objects(StatsTab),
+
+    ok.
 
 %% connection_count() ->
 %%     timer:sleep(50), % give the TCP stack time to deliver messages
