@@ -114,11 +114,11 @@ execute(ReqId, From, Host, Port, Ssl, Path, Method, Hdrs, Body, Options) ->
     %% BaseAttempts is 2 for an existing socket because we may find that the
     %% socket has been closed when we use it and we want to open a new socket
     %% and retry at least once in that case.
-    {Socket, Lb, BaseAttempts} =
+    {Socket, Lb, ConnInfo, BaseAttempts} =
         case lhttpc_lb:checkout(Host, Port, Ssl, MaxConnections, ConnectionTimeout, RequestLimit, ConnectionLifetime) of
-            {ok, Lb0, S}     -> {S, Lb0, 2};            % Re-using HTTP/1.1 connections
-            {no_socket, Lb0} -> {undefined, Lb0, 1};    % Opening a new HTTP/1.1 connection
-            retry_later      -> throw(retry_later)
+            {ok, Lb0, CI0, S}     -> {S, Lb0, CI0, 2};          % Re-using HTTP/1.1 connections
+            {no_socket, Lb0, CI0} -> {undefined, Lb0, CI0, 1};  % Opening a new HTTP/1.1 connection
+            retry_later           -> throw(retry_later)
         end,
     State = #client_state{
         req_id = ReqId,
@@ -149,7 +149,7 @@ execute(ReqId, From, Host, Port, Ssl, Path, Method, Hdrs, Body, Options) ->
         {R, NewSocket} ->
             % The socket we ended up doing the request over is returned
             % here, it might be the same as Socket, but we don't know.
-            lhttpc_lb:checkin(Lb, Ssl, NewSocket),
+            lhttpc_lb:checkin(Lb, ConnInfo, Ssl, NewSocket),
             {ok, R}
     end,
     {response, ReqId, self(), Response}.

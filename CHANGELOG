@@ -1,5 +1,7 @@
 Version 1.16.0
 * Use multiple load balancers for large connection pools.
+* Close expiring sockets in the client so that other requests on that same
+  connection pool are not blocked.
 
 Version 1.15.0
 * Add stats_fun option to lhttpc:request.

@@ -4,7 +4,7 @@
 %%% connection attempts from clients.
 -module(lhttpc_lb).
 -behaviour(gen_server).
--export([start_link/1, checkout/7, checkin/3, connection_count/3, connection_count/4, connection_count/1]).
+-export([start_link/1, checkout/7, checkin/4, connection_count/3, connection_count/4, connection_count/1]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          code_change/3, terminate/2]).
 
@@ -58,7 +58,7 @@ start_link(Config) ->
 -spec checkout(host(), port_number(), SSL::boolean(),
                max_connections(), connection_timeout(),
                request_limit(), connection_lifetime()) ->
-        {ok, pid(), socket()} | retry_later | {no_socket, pid()}.
+        {ok, pid(), conn_info(), socket()} | retry_later | {no_socket, pid(), conn_info()}.
 checkout(Host, Port, Ssl, MaxConn, ConnTimeout, RequestLimit, ConnLifetime) ->
     {LbIndex, LbMaxConn} =
         %% The per-load-balancer max_connections is just approximate when
@@ -73,8 +73,15 @@ checkout(Host, Port, Ssl, MaxConn, ConnTimeout, RequestLimit, ConnLifetime) ->
     gen_server:call(Lb, {checkout, self(), LbMaxConn, ConnLifetime}, infinity).
 
 %% Called when we're done and the socket can still be reused
--spec checkin(pid(), SSL::boolean(), Socket::socket()) -> ok.
-checkin(Lb, Ssl, Socket) ->
+-spec checkin(pid(), conn_info(), SSL::boolean(), Socket::socket()) -> ok.
+checkin(Lb, ConnInfo, Ssl, Socket) ->
+    %% If the socket's expire time has been reached close the socket here in
+    %% the client instead of in the load balancer so in case it is slow it
+    %% does not block other requests.  The load balancer will call close on
+    %% the socket a second time.
+    expire_time_reached(ConnInfo) andalso
+        lhttpc_sock:close(Socket, Ssl),
+
     %% Give ownership back to the server ASAP. The client has to have
     %% kept the socket passive. We rely on its good behaviour.
     %% If the transfer doesn't work, we don't notify.
@@ -143,8 +150,9 @@ handle_call({checkout, Pid, MaxConn, ConnLifetime}, _From, S0=#state{free=[], cl
                                 CLNativeJitter = CLNative + rand:uniform(CLNative div 5),
                                 erlang:monotonic_time() + CLNativeJitter
                 end,
-            add_client(Tid, Pid, #conn_info{request_count = 1, expire = Expire}),
-            {reply, {no_socket, self()}, S1};
+            ConnInfo = #conn_info{request_count = 1, expire = Expire},
+            add_client(Tid, Pid, ConnInfo),
+            {reply, {no_socket, self(), ConnInfo}, S1};
         false ->
             {reply, retry_later, S1}
     end;
@@ -159,8 +167,9 @@ handle_call({checkout, Pid, MaxConn, ConnLifetime}, _From,
     case lhttpc_sock:controlling_process(Taken, Pid, Ssl) of
         ok ->
             cancel_timer(Timer, Taken),
-            add_client(Tid, Pid, ConnInfo#conn_info{request_count = ConnInfo#conn_info.request_count + 1}),
-            {reply, {ok, self(), Taken}, S1#state{free=Free}};
+            ConnInfo0 = ConnInfo#conn_info{request_count = ConnInfo#conn_info.request_count + 1},
+            add_client(Tid, Pid, ConnInfo0),
+            {reply, {ok, self(), ConnInfo0, Taken}, S1#state{free=Free}};
         {error, badarg} ->
             %% The caller died.
             lhttpc_sock:setopts(Taken, [{active, once}], Ssl),
