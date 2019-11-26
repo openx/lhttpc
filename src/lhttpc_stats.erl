@@ -215,13 +215,14 @@ print() ->
                       "---------------------------------------- ---------- --------- --------- --------- --------- --- --- ------ --------\n",
                      [ ServiceLifetime / 1000000 ]),
             lists:foreach(
-              fun (#hps_stats{key=Key={Host, Port, _},
+              fun (#hps_stats{key={Host, Port, Ssl},
                               request_count=Requests, connection_count=Connections,
                               connection_error_count=ConnectError,
                               connection_remote_close_count=RemoteClose,
                               connection_local_close_count=LocalClose,
                               connection_cumulative_lifetime_usec=ConnectionLifetime}) ->
-                      {ActiveConnections, IdleConnections} = lhttpc_lb:connection_count(Key),
+                      %% The connection_count call only gets stats for the first load balancer:
+                      {ActiveConnections, IdleConnections} = lhttpc_lb:connection_count({Host, Port, Ssl, 1}),
                       io:format("~-40.40s ~10B ~9B ~9B ~9B ~9B ~3B ~3B ~6.2f ~8.2f\n",
                                 [ io_lib:format("~s:~B", [ Host, Port ])
                                 , Requests, Connections, ConnectError, RemoteClose, LocalClose

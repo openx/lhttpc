@@ -4,11 +4,12 @@
 %%% connection attempts from clients.
 -module(lhttpc_lb).
 -behaviour(gen_server).
--export([start_link/1, checkout/7, checkin/3, connection_count/3, connection_count/1]).
+-export([start_link/1, checkout/7, checkin/3, connection_count/3, connection_count/4, connection_count/1]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          code_change/3, terminate/2]).
 
 -define(SHUTDOWN_DELAY, 10000).
+-define(LB_MAX_CONNECTIONS, 150).
 
 %% TODO: transfert_socket, in case of checkout+give_away
 
@@ -16,6 +17,7 @@
         {host :: host(),
          port :: port_number(),
          ssl :: boolean(),
+         lb_index :: non_neg_integer(),
          max_conn :: max_connections(),
          timeout :: timeout(),
          request_limit :: request_limit(),
@@ -58,11 +60,17 @@ start_link(Config) ->
                request_limit(), connection_lifetime()) ->
         {ok, pid(), socket()} | retry_later | {no_socket, pid()}.
 checkout(Host, Port, Ssl, MaxConn, ConnTimeout, RequestLimit, ConnLifetime) ->
-    Config = #config{host = Host, port = Port, ssl = Ssl,
-                     max_conn = MaxConn, timeout = ConnTimeout,
+    {LbIndex, LbMaxConn} =
+        %% The per-load-balancer max_connections is just approximate when
+        %% there are multiple load balancers.
+        if MaxConn > ?LB_MAX_CONNECTIONS -> {rand:uniform((MaxConn + ?LB_MAX_CONNECTIONS - 1) div ?LB_MAX_CONNECTIONS), ?LB_MAX_CONNECTIONS};
+           true                          -> {1, MaxConn}
+        end,
+    Config = #config{host = Host, port = Port, ssl = Ssl, lb_index = LbIndex,
+                     max_conn = LbMaxConn, timeout = ConnTimeout,
                      request_limit = RequestLimit, conn_lifetime = ConnLifetime},
     Lb = find_or_start_lb(Config),
-    gen_server:call(Lb, {checkout, self(), MaxConn, ConnLifetime}, infinity).
+    gen_server:call(Lb, {checkout, self(), LbMaxConn, ConnLifetime}, infinity).
 
 %% Called when we're done and the socket can still be reused
 -spec checkin(pid(), SSL::boolean(), Socket::socket()) -> ok.
@@ -78,10 +86,19 @@ checkin(Lb, Ssl, Socket) ->
 %% Returns a tuple with the number of active (currently in use) and
 %% the number of idle (open but not currently in use) connections for
 %% the host, port, and SSL state.
+%%
+%% The three-argument form is a temporary hack for applications that don't
+%% understand that there can be multiple load balancers for a particular host.
+%% This is for the use of the component tests.
 -spec connection_count(host(), port_number(), Ssl::boolean()) ->
                        {ActiveConnections::integer(), IdleConnections::integer()}.
 connection_count(Host, Port, Ssl) ->
-    connection_count({Host, Port, Ssl}).
+    connection_count({Host, Port, Ssl, 1}).
+
+-spec connection_count(host(), port_number(), Ssl::boolean(), LbIndex::non_neg_integer()) ->
+                       {ActiveConnections::integer(), IdleConnections::integer()}.
+connection_count(Host, Port, Ssl, LbIndex) ->
+    connection_count({Host, Port, Ssl, LbIndex}).
 
 connection_count(Name) ->
     case find_lb(Name) of
@@ -92,14 +109,15 @@ connection_count(Name) ->
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%% GEN_SERVER CALLBACKS %%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%
-init(Config=#config{host=Host, port=Port, ssl=Ssl}) ->
+init(Config=#config{host=Host, port=Port, ssl=Ssl, lb_index=LbIndex}) ->
     %% Write host config to process dictionary so that it can be fetched with
-    %% `process_info(Pid, dictionary)'.
-    put(lhttpc_lb_host, {Host, Port, Ssl}),
+    %% `process_info(Pid, dictionary)'.  This allows us to easily discover the
+    %% host of a load balancer that is having problems.
+    put(lhttpc_lb_host, {Host, Port, Ssl, LbIndex}),
 
     %% we must use insert_new because it is possible a concurrent request is
     %% starting such a server at exactly the same time.
-    case ets:insert_new(?MODULE, {{Host,Port,Ssl}, self()}) of
+    case ets:insert_new(?MODULE, {{Host, Port, Ssl, LbIndex}, self()}) of
         true ->
             {ok, #state{config=Config,
                         clients=ets:new(clients, [set, private])}};
@@ -220,9 +238,9 @@ handle_info(_Info, State) ->
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
-terminate(_Reason, #state{config=#config{host=H, port=P, ssl=Ssl}, free=Free, clients=Tid}) ->
+terminate(_Reason, #state{config=#config{host=H, port=P, ssl=Ssl, lb_index=LbIndex}, free=Free, clients=Tid}) ->
     ets:delete(Tid),
-    ets:delete(?MODULE,{H,P,Ssl}),
+    ets:delete(?MODULE,{H, P, Ssl, LbIndex}),
     lists:foreach(fun (#conn_free{socket=Socket}) ->
                           lhttpc_stats:record(close_connection_local, Socket),
                           lhttpc_sock:close(Socket,Ssl)
@@ -237,8 +255,8 @@ terminate(_Reason, #state{config=#config{host=H, port=P, ssl=Ssl}, free=Free, cl
 %% might happen between a read and the use of the pid. A busy load balancer
 %% should not have this problem.
 -spec find_or_start_lb(config()) -> pid().
-find_or_start_lb(Config=#config{host=Host, port=Port, ssl=Ssl}) ->
-    Name = {Host, Port, Ssl},
+find_or_start_lb(Config=#config{host=Host, port=Port, ssl=Ssl, lb_index=LbIndex}) ->
+    Name = {Host, Port, Ssl, LbIndex},
     case ets:lookup(?MODULE, Name) of
         [] ->
             case supervisor:start_child(lhttpc_lb_sup, [ Config ]) of
@@ -256,8 +274,8 @@ find_or_start_lb(Config=#config{host=Host, port=Port, ssl=Ssl}) ->
 
 %% Version of the function to be used when we don't want to start a load balancer
 %% if none is found
--spec find_lb(Name::{host(),port_number(),boolean()}) -> {error,undefined} | {ok,pid()}.
-find_lb(Name={_Host,_Port,_Ssl}) ->
+-spec find_lb(Name::{host(), port_number(), boolean(), non_neg_integer()}) -> {error, undefined} | {ok, pid()}.
+find_lb(Name={_Host, _Port, _Ssl, _LbIndex}) ->
     case ets:lookup(?MODULE, Name) of
         [] -> {error, undefined};
         [{_Name, Pid}] ->
