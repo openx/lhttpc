@@ -4,7 +4,7 @@
 %%% connection attempts from clients.
 -module(lhttpc_lb).
 -behaviour(gen_server).
--export([start_link/1, checkout/7, checkin/4, connection_count/3, connection_count/1]).
+-export([start_link/1, checkout/7, checkin/3, connection_count/3, connection_count/1]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          code_change/3, terminate/2]).
 
@@ -56,7 +56,7 @@ start_link(Config) ->
 -spec checkout(host(), port_number(), SSL::boolean(),
                max_connections(), connection_timeout(),
                request_limit(), connection_lifetime()) ->
-        {ok, socket()} | retry_later | no_socket.
+        {ok, pid(), socket()} | retry_later | {no_socket, pid()}.
 checkout(Host, Port, Ssl, MaxConn, ConnTimeout, RequestLimit, ConnLifetime) ->
     Config = #config{host = Host, port = Port, ssl = Ssl,
                      max_conn = MaxConn, timeout = ConnTimeout,
@@ -65,21 +65,14 @@ checkout(Host, Port, Ssl, MaxConn, ConnTimeout, RequestLimit, ConnLifetime) ->
     gen_server:call(Lb, {checkout, self(), MaxConn, ConnLifetime}, infinity).
 
 %% Called when we're done and the socket can still be reused
--spec checkin(host(), port_number(), SSL::boolean(), Socket::socket()) -> ok.
-checkin(Host, Port, Ssl, Socket) ->
-    case find_lb({Host,Port,Ssl}) of
-        {error, undefined} ->
-            %% should we close the socket? We're not keeping it! There are no
-            %% Lbs available!
-            ok;
-        {ok, Pid} ->
-            %% Give ownership back to the server ASAP. The client has to have
-            %% kept the socket passive. We rely on its good behaviour.
-            %% If the transfer doesn't work, we don't notify.
-            case lhttpc_sock:controlling_process(Socket, Pid, Ssl) of
-                ok -> gen_server:cast(Pid, {checkin, self(), Socket});
-                _ -> ok
-            end
+-spec checkin(pid(), SSL::boolean(), Socket::socket()) -> ok.
+checkin(Lb, Ssl, Socket) ->
+    %% Give ownership back to the server ASAP. The client has to have
+    %% kept the socket passive. We rely on its good behaviour.
+    %% If the transfer doesn't work, we don't notify.
+    case lhttpc_sock:controlling_process(Socket, Lb, Ssl) of
+        ok -> gen_server:cast(Lb, {checkin, self(), Socket});
+        _ -> ok
     end.
 
 %% Returns a tuple with the number of active (currently in use) and
@@ -133,7 +126,7 @@ handle_call({checkout, Pid, MaxConn, ConnLifetime}, _From, S0=#state{free=[], cl
                                 erlang:monotonic_time() + CLNativeJitter
                 end,
             add_client(Tid, Pid, #conn_info{request_count = 1, expire = Expire}),
-            {reply, no_socket, S1};
+            {reply, {no_socket, self()}, S1};
         false ->
             {reply, retry_later, S1}
     end;
@@ -149,7 +142,7 @@ handle_call({checkout, Pid, MaxConn, ConnLifetime}, _From,
         ok ->
             cancel_timer(Timer, Taken),
             add_client(Tid, Pid, ConnInfo#conn_info{request_count = ConnInfo#conn_info.request_count + 1}),
-            {reply, {ok, Taken}, S1#state{free=Free}};
+            {reply, {ok, self(), Taken}, S1#state{free=Free}};
         {error, badarg} ->
             %% The caller died.
             lhttpc_sock:setopts(Taken, [{active, once}], Ssl),
