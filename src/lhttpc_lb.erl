@@ -4,7 +4,7 @@
 %%% connection attempts from clients.
 -module(lhttpc_lb).
 -behaviour(gen_server).
--export([start_link/1, checkout/7, checkin/4, connection_count/3, connection_count/4, connection_count/1]).
+-export([start_link/1, checkout/7, checkin/5, connection_count/3, connection_count/4, connection_count/1]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          code_change/3, terminate/2]).
 
@@ -29,7 +29,7 @@
 
 -record(conn_free,
         {socket :: socket(),
-         timer_ref :: reference(),
+         timer_ref :: reference() | 'undefined',
          conn_info :: conn_info()}).
 
 -record(state,
@@ -73,8 +73,8 @@ checkout(Host, Port, Ssl, MaxConn, ConnTimeout, RequestLimit, ConnLifetime) ->
     gen_server:call(Lb, {checkout, self(), LbMaxConn, ConnLifetime}, infinity).
 
 %% Called when we're done and the socket can still be reused
--spec checkin(pid(), conn_info(), SSL::boolean(), Socket::socket()) -> ok.
-checkin(Lb, ConnInfo, Ssl, Socket) ->
+-spec checkin(pid(), conn_info(), SSL::boolean(), Socket::socket(), TransferOwnership::boolean()) -> ok.
+checkin(Lb, ConnInfo, Ssl, Socket, TransferOwnership) ->
     %% If the socket's expire time has been reached close the socket here in
     %% the client instead of in the load balancer so in case it is slow it
     %% does not block other requests.  The load balancer will call close on
@@ -85,9 +85,9 @@ checkin(Lb, ConnInfo, Ssl, Socket) ->
     %% Give ownership back to the server ASAP. The client has to have
     %% kept the socket passive. We rely on its good behaviour.
     %% If the transfer doesn't work, we don't notify.
-    case lhttpc_sock:controlling_process(Socket, Lb, Ssl) of
-        ok -> gen_server:cast(Lb, {checkin, self(), Socket});
-        _ -> ok
+    case TransferOwnership =:= false orelse lhttpc_sock:controlling_process(Socket, Lb, Ssl) =:= ok of
+        true -> gen_server:cast(Lb, {checkin, self(), Socket});
+        _    ->  ok
     end.
 
 %% Returns a tuple with the number of active (currently in use) and
@@ -157,34 +157,24 @@ handle_call({checkout, Pid, MaxConn, ConnLifetime}, _From, S0=#state{free=[], cl
             {reply, retry_later, S1}
     end;
 handle_call({checkout, Pid, MaxConn, ConnLifetime}, _From,
-            S0=#state{free=[#conn_free{socket=Taken, timer_ref=Timer, conn_info=ConnInfo} | Free], clients=Tid, config=#config{ssl=Ssl}}) ->
+            S0=#state{free=[#conn_free{socket=Taken, timer_ref=Timer, conn_info=ConnInfo} | Free], clients=Tid}) ->
     %% Update the state if this call updates the max_conn or conn_lifetime.
     S1 = case S0#state.config of
              #config{max_conn=MaxConn, conn_lifetime=ConnLifetime} -> S0;
              StaleConfig -> S0#state{config = StaleConfig#config{max_conn = MaxConn, conn_lifetime = ConnLifetime}}
          end,
-    lhttpc_sock:setopts(Taken, [{active,false}], Ssl),
-    case lhttpc_sock:controlling_process(Taken, Pid, Ssl) of
-        ok ->
-            cancel_timer(Timer, Taken),
-            ConnInfo0 = ConnInfo#conn_info{request_count = ConnInfo#conn_info.request_count + 1},
-            add_client(Tid, Pid, ConnInfo0),
-            {reply, {ok, self(), ConnInfo0, Taken}, S1#state{free=Free}};
-        {error, badarg} ->
-            %% The caller died.
-            lhttpc_sock:setopts(Taken, [{active, once}], Ssl),
-            {noreply, S1};
-        {error, _Reason} -> % socket is closed or something
-            cancel_timer(Timer, Taken),
-            handle_call({checkout,Pid}, _From, S1#state{free=Free})
-    end;
+    cancel_timer(Timer, Taken),
+    ConnInfo0 = ConnInfo#conn_info{request_count = ConnInfo#conn_info.request_count + 1},
+    add_client(Tid, Pid, ConnInfo0),
+    {reply, {ok, self(), ConnInfo0, Taken}, S1#state{free=Free}};
+
 handle_call({connection_count}, _From, S = #state{free=Free, clients=Tid}) ->
     {reply, {ets:info(Tid, size), length(Free)}, S};
 
 handle_call(_Msg, _From, S) ->
     {noreply, S}.
 
-handle_cast({checkin, Pid, Socket}, S = #state{config=Config=#config{ssl=Ssl, max_conn=MaxConn, timeout=T}, clients=Tid, free=Free}) ->
+handle_cast({checkin, Pid, Socket}, S = #state{config=Config=#config{max_conn=MaxConn, timeout=T}, clients=Tid, free=Free}) ->
     lhttpc_stats:record(end_request, Socket),
     SocketAction =
         case remove_client(Tid, Pid) of
@@ -196,13 +186,7 @@ handle_cast({checkin, Pid, Socket}, S = #state{config=Config=#config{ssl=Ssl, ma
                     ets:info(Tid, size) >= MaxConn
                 of
                     true       -> close_connection_local;
-                    false ->
-                        %% the client cast function took care of giving us ownership
-                        %% Set {active, once} so that we will get a message if the remote closes the socket.
-                        case lhttpc_sock:setopts(Socket, [{active, once}], Ssl) of
-                            ok -> keep_socket;
-                            _  -> close_connection_remote
-                        end
+                    false      -> keep_socket
                 end
         end,
     case SocketAction of
@@ -225,19 +209,8 @@ handle_info({'DOWN', _Ref, process, Pid, Reason}, S=#state{clients=Tid}) ->
     end,
     remove_client(Tid,Pid),
     noreply_maybe_shutdown(S);
-handle_info({tcp_closed, Socket}, State) ->
-    noreply_maybe_shutdown(remove_socket(Socket, close_connection_remote, State));
-handle_info({ssl_closed, Socket}, State) ->
-    noreply_maybe_shutdown(remove_socket(Socket, close_connection_remote, State));
 handle_info({timeout, Socket}, State) ->
-    noreply_maybe_shutdown(remove_socket(Socket, close_connection_remote, State));
-handle_info({tcp_error, Socket, _}, State) ->
-    noreply_maybe_shutdown(remove_socket(Socket, close_connection_remote, State));
-handle_info({ssl_error, Socket, _}, State) ->
-    noreply_maybe_shutdown(remove_socket(Socket, close_connection_remote, State));
-handle_info({tcp, Socket, _}, State) ->
-    noreply_maybe_shutdown(remove_socket(Socket, close_connection_remote, State));
-handle_info({ssl, Socket, _}, State) ->
+    %% Fired by start_timer to close idle sockets.
     noreply_maybe_shutdown(remove_socket(Socket, close_connection_remote, State));
 handle_info(timeout, State) ->
     {stop, normal, State};
@@ -327,6 +300,7 @@ drop_and_cancel(Socket, [H|T]) ->
     [H | drop_and_cancel(Socket, T)].
 
 -spec cancel_timer(reference(), socket()) -> ok.
+cancel_timer(undefined, _Socket) -> ok;
 cancel_timer(TimerRef, Socket) ->
     case erlang:cancel_timer(TimerRef) of
         false ->
@@ -337,8 +311,8 @@ cancel_timer(TimerRef, Socket) ->
         _ -> ok
     end.
 
--spec start_timer(socket(), connection_timeout()) -> reference().
-start_timer(_, infinity) -> make_ref(); % dummy timer
+-spec start_timer(socket(), connection_timeout()) -> reference() | 'undefined'.
+start_timer(_, infinity) -> 'undefined';
 start_timer(Socket, Timeout) ->
     erlang:send_after(Timeout, self(), {timeout,Socket}).
 

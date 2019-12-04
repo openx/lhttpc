@@ -147,9 +147,10 @@ execute(ReqId, From, Host, Port, Ssl, Path, Method, Hdrs, Body, Options) ->
         {R, undefined} ->
             {ok, R};
         {R, NewSocket} ->
-            % The socket we ended up doing the request over is returned
-            % here, it might be the same as Socket, but we don't know.
-            lhttpc_lb:checkin(Lb, ConnInfo, Ssl, NewSocket),
+            %% Return the socket used for the request to the pool.  This may
+            %% not be the same socket that the pool gave us; if so we need to
+            %% transfer ownership to the pool.
+            lhttpc_lb:checkin(Lb, ConnInfo, Ssl, NewSocket, NewSocket =/= Socket),
             {ok, R}
     end,
     {response, ReqId, self(), Response}.

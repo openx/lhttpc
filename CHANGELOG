@@ -1,3 +1,13 @@
+Version 1.17.0
+* Eliminate some socket operations to reduce contention.
+    * No longer use {active, once} to eagerly discover closed sockets.  This
+      means that if the socket is closed remotely we won't notice until we try
+      to use it, but lhttpc_client already has retry logic to deal with this
+      situation.
+    * No longer transfer ownership of socket to client on checkout.  Since the
+      client never sets the socket to active we don't need to worry about
+      socket-related message delivery and it isn't necessary.
+
 Version 1.16.0
 * Use multiple load balancers for large connection pools.
 * Close expiring sockets in the client so that other requests on that same
