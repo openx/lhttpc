@@ -24,7 +24,8 @@
          conn_lifetime :: connection_lifetime()}).
 
 -record(conn_info,
-        {request_count = 0 :: non_neg_integer(),
+        {socket :: socket() | 'no_socket',
+         request_count = 0 :: non_neg_integer(),
          expire :: integer() | undefined}).
 
 -record(conn_free,
@@ -150,7 +151,7 @@ handle_call({checkout, Pid, MaxConn, ConnLifetime}, _From, S0=#state{free=[], cl
                                 CLNativeJitter = CLNative + rand:uniform(CLNative div 5),
                                 erlang:monotonic_time() + CLNativeJitter
                 end,
-            ConnInfo = #conn_info{request_count = 1, expire = Expire},
+            ConnInfo = #conn_info{socket = no_socket, request_count = 1, expire = Expire},
             add_client(Tid, Pid, ConnInfo),
             {reply, {no_socket, self(), ConnInfo}, S1};
         false ->
@@ -174,32 +175,31 @@ handle_call({connection_count}, _From, S = #state{free=Free, clients=Tid}) ->
 handle_call(_Msg, _From, S) ->
     {noreply, S}.
 
-handle_cast({checkin, Pid, Socket}, S = #state{config=Config=#config{max_conn=MaxConn, timeout=T}, clients=Tid, free=Free}) ->
+handle_cast({checkin, Pid, Socket}, S = #state{config=Config=#config{ssl=Ssl, max_conn=MaxConn, timeout=T}, clients=Tid, free=Free}) ->
     lhttpc_stats:record(end_request, Socket),
-    SocketAction =
-        case remove_client(Tid, Pid) of
-            undefined          -> ConnInfo = undefined,
-                                  close_connection_local;
-            ConnInfo ->
-                case request_limit_reached(ConnInfo, Config) orelse
-                    expire_time_reached(ConnInfo) orelse
+    {SocketAction, ConnInfo1} =
+        case remove_client(Tid, Pid, Ssl, checkin) of
+            undefined          -> {close_connection_local, undefined};
+            ConnInfo0 ->
+                case request_limit_reached(ConnInfo0, Config) orelse
+                    expire_time_reached(ConnInfo0) orelse
                     ets:info(Tid, size) >= MaxConn
                 of
-                    true       -> close_connection_local;
-                    false      -> keep_socket
+                    true       -> {close_connection_local, ConnInfo0};
+                    false      -> {keep_socket, ConnInfo0#conn_info{socket = Socket}}
                 end
         end,
     case SocketAction of
         keep_socket ->
             Timer = start_timer(Socket,T),
-            {noreply, S#state{free=[#conn_free{socket = Socket, timer_ref = Timer, conn_info = ConnInfo} | Free]}};
+            {noreply, S#state{free=[#conn_free{socket = Socket, timer_ref = Timer, conn_info = ConnInfo1} | Free]}};
         CloseConnectionType ->
             noreply_maybe_shutdown(remove_socket(Socket, CloseConnectionType, S))
     end;
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
-handle_info({'DOWN', _Ref, process, Pid, Reason}, S=#state{clients=Tid}) ->
+handle_info({'DOWN', _Ref, process, Pid, Reason}, S=#state{clients=Tid, config=#config{ssl=Ssl}}) ->
     %% Client died
     case Reason of
         normal      -> ok;
@@ -207,7 +207,7 @@ handle_info({'DOWN', _Ref, process, Pid, Reason}, S=#state{clients=Tid}) ->
         timeout     -> lhttpc_stats:record(close_connection_timeout, Pid);
         OtherReason -> io:format(standard_error, "DOWN ~p\n", [ OtherReason ])
     end,
-    remove_client(Tid,Pid),
+    remove_client(Tid, Pid, Ssl, down),
     noreply_maybe_shutdown(S);
 handle_info({timeout, Socket}, State) ->
     %% Fired by start_timer to close idle sockets.
@@ -275,13 +275,16 @@ add_client(Tid, Pid, ConnInfo) ->
     ets:insert(Tid, {Pid, Ref, ConnInfo}),
     ok.
 
--spec remove_client(ets:tid(), pid()) -> conn_info() | undefined.
-remove_client(Tid, Pid) ->
+-spec remove_client(ets:tid(), pid(), Ssl::boolean(), 'checkin'|'down') -> conn_info() | undefined.
+remove_client(Tid, Pid, Ssl, Status) ->
     case ets:lookup(Tid, Pid) of
         [] -> undefined; % client already removed
         [{_Pid, Ref, ConnInfo}] ->
             erlang:demonitor(Ref, [flush]),
             ets:delete(Tid, Pid),
+            Socket = ConnInfo#conn_info.socket,
+            Status =:= down andalso Socket =/= no_socket andalso
+                lhttpc_sock:close(Socket, Ssl),
             ConnInfo
     end.
 
