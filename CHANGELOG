@@ -1,4 +1,4 @@
-Version 1.17.0
+Version 1.17.1
 * Eliminate some socket operations to reduce contention.
     * No longer use {active, once} to eagerly discover closed sockets.  This
       means that if the socket is closed remotely we won't notice until we try

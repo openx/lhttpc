@@ -83,12 +83,12 @@ checkin(Lb, ConnInfo, Ssl, Socket, TransferOwnership) ->
     expire_time_reached(ConnInfo) andalso
         lhttpc_sock:close(Socket, Ssl),
 
-    %% Give ownership back to the server ASAP. The client has to have
-    %% kept the socket passive. We rely on its good behaviour.
-    %% If the transfer doesn't work, we don't notify.
-    case TransferOwnership =:= false orelse lhttpc_sock:controlling_process(Socket, Lb, Ssl) =:= ok of
-        true -> gen_server:cast(Lb, {checkin, self(), Socket});
-        _    ->  ok
+    %% We need to return the socket to the load balancer before making it the
+    %% controlling process to prevent a race; see commit message for more
+    %% info.
+    gen_server:cast(Lb, {checkin, self(), Socket}),
+    if TransferOwnership -> lhttpc_sock:controlling_process(Socket, Lb, Ssl), ok;
+       true              -> ok
     end.
 
 %% Returns a tuple with the number of active (currently in use) and
