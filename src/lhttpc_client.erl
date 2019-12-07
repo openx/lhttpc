@@ -296,7 +296,7 @@ read_response(State, Vsn, {StatusCode, _} = Status, Hdrs) ->
             },
             send_request(NewState);
         {error, timeout} ->
-            lhttpc_stats:record(close_connection_timeout, self()),
+            lhttpc_stats:record(close_connection_timeout, Socket),
             lhttpc_sock:close(Socket, Ssl),
             NewState = State#client_state{
                 socket = undefined,

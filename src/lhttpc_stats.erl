@@ -35,10 +35,6 @@
                      longest_idle_time_usec=0 :: integer()
                    , pid :: pid() | undefined
                     }).
--define(STATS_CONN_MATCH_PID(Pid),
-        erlang:make_tuple(record_info(size, conn_stats),
-                          '_',
-                          [ {1, 'conn_stats'}, {#conn_stats.key, '$1'}, {#conn_stats.pid, Pid} ])).
 
 
 %%%
@@ -139,30 +135,20 @@ record_untrapped(close_connection_local, Socket) ->
         false -> ok
     end;
 
-record_untrapped(close_connection_timeout, Pid) ->
+record_untrapped(close_connection_timeout, Socket) ->
     case stats_enabled() of
         true ->
-            case ets:match(?MODULE, ?STATS_CONN_MATCH_PID(Pid)) of
-                [ [ Socket ] ] ->
-                    ?DEBUG(io:format(standard_error, "timeout Pid ~p -> Socket ~p\n", [ Pid, Socket ])),
-                    case ets:lookup(?MODULE, Socket) of
-                        [#conn_stats{open_time=undefined}] ->
-                            throw(bad_open_time); % shouldn't happen
-                        [#conn_stats{hps_key=HPSKey, open_time=OpenTime}] ->
-                            Lifetime = erlang:convert_time_unit(erlang:monotonic_time() - OpenTime, native, micro_seconds),
-                            ets:update_counter(?MODULE, HPSKey, [ {#hps_stats.connection_local_close_count, 1},
-                                                                  {#hps_stats.connection_cumulative_lifetime_usec, Lifetime} ]),
-                            ets:delete(?MODULE, Socket),
-                            ok;
-                        [] ->
-                            ?DEBUG(io:format(standard_error, "C: socket not found: ~p\n", [ Socket ])),
-                            ?DEBUG(throw(not_found))
-                    end;
+            case ets:lookup(?MODULE, Socket) of
+                [#conn_stats{open_time=undefined}] ->
+                    throw(bad_open_time); % shouldn't happen
+                [#conn_stats{hps_key=HPSKey, open_time=OpenTime}] ->
+                    Lifetime = erlang:convert_time_unit(erlang:monotonic_time() - OpenTime, native, micro_seconds),
+                    ets:update_counter(?MODULE, HPSKey, [ {#hps_stats.connection_local_close_count, 1},
+                                                          {#hps_stats.connection_cumulative_lifetime_usec, Lifetime} ]),
+                    ets:delete(?MODULE, Socket),
+                    ok;
                 [] ->
-                    ?DEBUG(io:format(standard_error, "D: pid not found: ~p\n", [ Pid ])),
-                    ?DEBUG(throw(not_found));
-                MultiplePorts ->
-                    error_logger:error_msg("~p:~p: unexpected return ~p ~p\n", [ ?MODULE, ?LINE, Pid, MultiplePorts ]),
+                    ?DEBUG(io:format(standard_error, "C: not found: ~p\n", [ Socket ])),
                     ?DEBUG(throw(not_found))
             end;
         false -> ok

@@ -188,7 +188,7 @@ handle_call(_Msg, _From, S) ->
 handle_cast({checkin, Pid, Socket}, S=#state{config=Config=#config{ssl=Ssl, max_conn=MaxConn, timeout=IdleTimeout}, clients=Tid, free_queue=FreeQueue, time_queue=TimeQueue}) ->
     lhttpc_stats:record(end_request, Socket),
     {SocketAction, ConnInfo1} =
-        case remove_client(Tid, Pid, Ssl, checkin) of
+        case remove_client(Tid, Pid) of
             undefined          -> {close_connection_local, undefined};
             ConnInfo0 ->
                 case request_limit_reached(ConnInfo0, Config) orelse
@@ -228,12 +228,18 @@ handle_cast(_Msg, State) ->
 handle_info({'DOWN', _Ref, process, Pid, Reason}, S=#state{clients=Tid, config=#config{ssl=Ssl}}) ->
     %% Client died
     case Reason of
-        normal      -> ok;
-        noproc      -> ok; %% A client made a request but died before we could start monitoring it.
-        timeout     -> lhttpc_stats:record(close_connection_timeout, Pid);
+        normal      -> ok; %% Client died without returning socket.
+        noproc      -> ok; %% Client made a request but died before we could start monitoring it.
+        timeout     -> ok; %% Client was killed by request timeout before it returned socket.
         OtherReason -> io:format(standard_error, "DOWN ~p\n", [ OtherReason ])
     end,
-    remove_client(Tid, Pid, Ssl, down),
+    case remove_client(Tid, Pid) of
+        undefined -> ok;
+        #conn_info{socket=no_socket} -> ok;
+        #conn_info{socket=Socket} ->
+            lhttpc_stats:record(close_connection_timeout, Socket),
+            lhttpc_sock:close(Socket, Ssl)
+    end,
     noreply_maybe_shutdown(S);
 handle_info(timeout, State) ->
     {stop, normal, State};
@@ -298,16 +304,13 @@ add_client(Tid, Pid, ConnInfo) ->
     ets:insert(Tid, {Pid, Ref, ConnInfo}),
     ok.
 
--spec remove_client(ets:tid(), pid(), Ssl::boolean(), 'checkin'|'down') -> conn_info() | undefined.
-remove_client(Tid, Pid, Ssl, Status) ->
+-spec remove_client(ets:tid(), pid()) -> conn_info() | undefined.
+remove_client(Tid, Pid) ->
     case ets:lookup(Tid, Pid) of
         [] -> undefined; % client already removed
         [{_Pid, Ref, ConnInfo}] ->
             erlang:demonitor(Ref, [flush]),
             ets:delete(Tid, Pid),
-            Socket = ConnInfo#conn_info.socket,
-            Status =:= down andalso Socket =/= no_socket andalso
-                lhttpc_sock:close(Socket, Ssl),
             ConnInfo
     end.
 
