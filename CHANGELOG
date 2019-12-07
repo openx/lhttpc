@@ -7,6 +7,7 @@ Version 1.17.1
     * No longer transfer ownership of socket to client on checkout.  Since the
       client never sets the socket to active we don't need to worry about
       socket-related message delivery and it isn't necessary.
+* Eliminate the use of timers to close idle sockets.
 
 Version 1.16.0
 * Use multiple load balancers for large connection pools.

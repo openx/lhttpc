@@ -4,7 +4,7 @@
 %%% connection attempts from clients.
 -module(lhttpc_lb).
 -behaviour(gen_server).
--export([start_link/1, checkout/7, checkin/5, connection_count/3, connection_count/4, connection_count/1]).
+-export([start_link/1, checkout/7, checkin/5, connection_count/3, connection_count/4, connection_count/1, close_idle/3, close_idle/4, close_idle/1]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          code_change/3, terminate/2]).
 
@@ -12,6 +12,8 @@
 -define(LB_MAX_CONNECTIONS, 150).
 
 %% TODO: transfert_socket, in case of checkout+give_away
+
+-type erlang_time() :: integer().
 
 -record(config,
         {host :: host(),
@@ -26,17 +28,13 @@
 -record(conn_info,
         {socket :: socket() | 'no_socket',
          request_count = 0 :: non_neg_integer(),
-         expire :: integer() | undefined}).
-
--record(conn_free,
-        {socket :: socket(),
-         timer_ref :: reference() | 'undefined',
-         conn_info :: conn_info()}).
+         expire_time :: erlang_time() | undefined}).
 
 -record(state,
         {config :: config(),
          clients :: ets:tid(),
-         free=[] :: list(conn_free())}).
+         free_queue = queue:new() :: queue:queue(conn_info()),
+         time_queue = queue:new() :: queue:queue(erlang_time())}).
 
 
 -export_types([host/0, port_number/0, socket/0, max_connections/0, request_limit/0, connection_lifetime/0, connection_timeout/0]).
@@ -49,7 +47,6 @@
 -type connection_lifetime() :: pos_integer() | 'infinity'.
 -type connection_timeout() :: timeout().
 -type conn_info() :: #conn_info{}.
--type conn_free() :: #conn_free{}.
 
 
 -spec start_link(config()) -> {ok, pid()}.
@@ -114,6 +111,18 @@ connection_count(Name) ->
         {ok, Pid} -> gen_server:call(Pid, {connection_count})
     end.
 
+close_idle(Host, Port, Ssl) ->
+    close_idle(Host, Port, Ssl, 1).
+
+close_idle(Host, Port, Ssl, LbIndex) ->
+    close_idle({Host, Port, Ssl, LbIndex}).
+
+close_idle(Name) ->
+    case find_lb(Name) of
+        {ok, Pid} -> gen_server:cast(Pid, close_idle);
+        _         -> ok
+    end.
+
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%% GEN_SERVER CALLBACKS %%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -133,49 +142,50 @@ init(Config=#config{host=Host, port=Port, ssl=Ssl, lb_index=LbIndex}) ->
             ignore
     end.
 
-handle_call({checkout, Pid, MaxConn, ConnLifetime}, _From, S0=#state{free=[], clients=Tid}) ->
+handle_call({checkout, Pid, MaxConn, ConnLifetime}, _From, S0=#state{clients=Tid, free_queue=FreeQueue, time_queue=TimeQueue}) ->
     %% Update the state if this call updates the max_conn or conn_lifetime.
     S1 = case S0#state.config of
              #config{max_conn=MaxConn, conn_lifetime=ConnLifetime} -> S0;
              StaleConfig -> S0#state{config = StaleConfig#config{max_conn = MaxConn, conn_lifetime = ConnLifetime}}
          end,
-    Size = ets:info(Tid, size),
-    case Size < MaxConn of
-        true ->
-            %% We don't have an open socket, but the client can open one.
-            Expire =
-                case ConnLifetime of
-                    infinity -> undefined;
-                    _        -> CLNative = erlang:convert_time_unit(ConnLifetime, milli_seconds, native),
-                                %% Add 20% jitter to connection lifetime.
-                                CLNativeJitter = CLNative + rand:uniform(CLNative div 5),
-                                erlang:monotonic_time() + CLNativeJitter
-                end,
-            ConnInfo = #conn_info{socket = no_socket, request_count = 1, expire = Expire},
-            add_client(Tid, Pid, ConnInfo),
-            {reply, {no_socket, self(), ConnInfo}, S1};
-        false ->
-            {reply, retry_later, S1}
-    end;
-handle_call({checkout, Pid, MaxConn, ConnLifetime}, _From,
-            S0=#state{free=[#conn_free{socket=Taken, timer_ref=Timer, conn_info=ConnInfo} | Free], clients=Tid}) ->
-    %% Update the state if this call updates the max_conn or conn_lifetime.
-    S1 = case S0#state.config of
-             #config{max_conn=MaxConn, conn_lifetime=ConnLifetime} -> S0;
-             StaleConfig -> S0#state{config = StaleConfig#config{max_conn = MaxConn, conn_lifetime = ConnLifetime}}
-         end,
-    cancel_timer(Timer, Taken),
-    ConnInfo0 = ConnInfo#conn_info{request_count = ConnInfo#conn_info.request_count + 1},
-    add_client(Tid, Pid, ConnInfo0),
-    {reply, {ok, self(), ConnInfo0, Taken}, S1#state{free=Free}};
 
-handle_call({connection_count}, _From, S = #state{free=Free, clients=Tid}) ->
-    {reply, {ets:info(Tid, size), length(Free)}, S};
+    case queue:is_empty(FreeQueue) of
+        true ->
+            Size = ets:info(Tid, size),
+            case Size < MaxConn of
+                true ->
+                    %% We don't have an open socket, but the client can open one.
+                    Expire =
+                        case ConnLifetime of
+                            infinity -> undefined;
+                            _        -> CLNative = erlang:convert_time_unit(ConnLifetime, milli_seconds, native),
+                                        %% Add 20% jitter to connection lifetime.
+                                        CLNativeJitter = CLNative + rand:uniform(CLNative div 5),
+                                        erlang:monotonic_time() + CLNativeJitter
+                        end,
+                    ConnInfo = #conn_info{socket = no_socket, request_count = 1, expire_time = Expire},
+                    add_client(Tid, Pid, ConnInfo),
+                    {reply, {no_socket, self(), ConnInfo}, S1};
+                false ->
+                    {reply, retry_later, S1}
+            end;
+        false ->
+            ConnInfo0 = queue:get(FreeQueue),
+            FreeQueue1 = queue:drop(FreeQueue),
+            TimeQueue1 = queue:drop_r(TimeQueue), % Drop the newest time.
+
+            ConnInfo1=#conn_info{socket=Socket} = ConnInfo0#conn_info{request_count = ConnInfo0#conn_info.request_count + 1},
+            add_client(Tid, Pid, ConnInfo1),
+            {reply, {ok, self(), ConnInfo1, Socket}, S1#state{free_queue = FreeQueue1, time_queue = TimeQueue1}}
+    end;
+
+handle_call({connection_count}, _From, S=#state{clients=Tid, free_queue=FreeQueue}) ->
+    {reply, {ets:info(Tid, size), queue:len(FreeQueue)}, S};
 
 handle_call(_Msg, _From, S) ->
     {noreply, S}.
 
-handle_cast({checkin, Pid, Socket}, S = #state{config=Config=#config{ssl=Ssl, max_conn=MaxConn, timeout=T}, clients=Tid, free=Free}) ->
+handle_cast({checkin, Pid, Socket}, S=#state{config=Config=#config{ssl=Ssl, max_conn=MaxConn, timeout=IdleTimeout}, clients=Tid, free_queue=FreeQueue, time_queue=TimeQueue}) ->
     lhttpc_stats:record(end_request, Socket),
     {SocketAction, ConnInfo1} =
         case remove_client(Tid, Pid, Ssl, checkin) of
@@ -189,13 +199,29 @@ handle_cast({checkin, Pid, Socket}, S = #state{config=Config=#config{ssl=Ssl, ma
                     false      -> {keep_socket, ConnInfo0#conn_info{socket = Socket}}
                 end
         end,
+
+    {FreeQueue1, TimeQueue1} =
+        case IdleTimeout of
+            infinity -> {FreeQueue, TimeQueue};
+            _        -> expire_sockets(erlang:monotonic_time() - erlang:convert_time_unit(IdleTimeout, millisecond, native), Ssl, FreeQueue, TimeQueue)
+        end,
+
     case SocketAction of
         keep_socket ->
-            Timer = start_timer(Socket,T),
-            {noreply, S#state{free=[#conn_free{socket = Socket, timer_ref = Timer, conn_info = ConnInfo1} | Free]}};
+            FreeQueue2 = queue:in(ConnInfo1, FreeQueue1),
+            TimeQueue2 = queue:in(erlang:monotonic_time(), TimeQueue1),
+            {noreply, S#state{free_queue = FreeQueue2, time_queue = TimeQueue2}};
         CloseConnectionType ->
-            noreply_maybe_shutdown(remove_socket(Socket, CloseConnectionType, S))
+            remove_socket(Socket, CloseConnectionType, Ssl),
+            noreply_maybe_shutdown(S#state{free_queue = FreeQueue1, time_queue = TimeQueue1})
     end;
+handle_cast(close_idle, S=#state{config=#config{ssl=Ssl, timeout=IdleTimeout}, free_queue=FreeQueue, time_queue=TimeQueue}) ->
+    {FreeQueue1, TimeQueue1} =
+        case IdleTimeout of
+            infinity -> {FreeQueue, TimeQueue};
+            _        -> expire_sockets(erlang:monotonic_time() - erlang:convert_time_unit(IdleTimeout, millisecond, native), Ssl, FreeQueue, TimeQueue)
+        end,
+    noreply_maybe_shutdown(S#state{free_queue = FreeQueue1, time_queue = TimeQueue1});
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
@@ -209,9 +235,6 @@ handle_info({'DOWN', _Ref, process, Pid, Reason}, S=#state{clients=Tid, config=#
     end,
     remove_client(Tid, Pid, Ssl, down),
     noreply_maybe_shutdown(S);
-handle_info({timeout, Socket}, State) ->
-    %% Fired by start_timer to close idle sockets.
-    noreply_maybe_shutdown(remove_socket(Socket, close_connection_remote, State));
 handle_info(timeout, State) ->
     {stop, normal, State};
 handle_info(_Info, State) ->
@@ -220,13 +243,13 @@ handle_info(_Info, State) ->
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
-terminate(_Reason, #state{config=#config{host=H, port=P, ssl=Ssl, lb_index=LbIndex}, free=Free, clients=Tid}) ->
+terminate(_Reason, #state{config=#config{host=H, port=P, ssl=Ssl, lb_index=LbIndex}, free_queue=FreeQueue, clients=Tid}) ->
     ets:delete(Tid),
     ets:delete(?MODULE,{H, P, Ssl, LbIndex}),
-    lists:foreach(fun (#conn_free{socket=Socket}) ->
+    lists:foreach(fun (#conn_info{socket=Socket}) ->
                           lhttpc_stats:record(close_connection_local, Socket),
                           lhttpc_sock:close(Socket,Ssl)
-                  end, Free),
+                  end, queue:to_list(FreeQueue)),
     ok.
 
 %%%%%%%%%%%%%%%
@@ -288,36 +311,22 @@ remove_client(Tid, Pid, Ssl, Status) ->
             ConnInfo
     end.
 
--spec remove_socket(socket(), close_connection_local | close_connection_remote, #state{}) -> #state{}.
-remove_socket(Socket, StatsCloseType, S = #state{config=#config{ssl=Ssl}, free=Free}) ->
+-spec remove_socket(socket(), close_connection_local | close_connection_remote, boolean()) -> ok.
+remove_socket(Socket, StatsCloseType, Ssl) ->
     lhttpc_stats:record(StatsCloseType, Socket),
     lhttpc_sock:close(Socket, Ssl),
-    S#state{free=drop_and_cancel(Socket,Free)}.
+    ok.
 
--spec drop_and_cancel(socket(), list(conn_free())) -> list(conn_free()).
-drop_and_cancel(_, []) -> [];
-drop_and_cancel(Socket, [#conn_free{socket=Socket, timer_ref=TimerRef} | Rest]) ->
-    cancel_timer(TimerRef, Socket),
-    Rest;
-drop_and_cancel(Socket, [H|T]) ->
-    [H | drop_and_cancel(Socket, T)].
-
--spec cancel_timer(reference(), socket()) -> ok.
-cancel_timer(undefined, _Socket) -> ok;
-cancel_timer(TimerRef, Socket) ->
-    case erlang:cancel_timer(TimerRef) of
+expire_sockets(IdleTime, Ssl, FreeQueue, TimeQueue) ->
+    case not queue:is_empty(FreeQueue) andalso
+        queue:get(TimeQueue) < IdleTime of
+        true ->
+            #conn_info{socket=Socket} = queue:get(FreeQueue),
+            remove_socket(Socket, close_connection_local, Ssl),
+            expire_sockets(IdleTime, Ssl, queue:drop(FreeQueue), queue:drop(TimeQueue));
         false ->
-            receive
-                {timeout, Socket} -> ok
-            after 0 -> ok
-            end;
-        _ -> ok
+            {FreeQueue, TimeQueue}
     end.
-
--spec start_timer(socket(), connection_timeout()) -> reference() | 'undefined'.
-start_timer(_, infinity) -> 'undefined';
-start_timer(Socket, Timeout) ->
-    erlang:send_after(Timeout, self(), {timeout,Socket}).
 
 request_limit_reached(_, #config{request_limit=infinity}) ->
     false;
@@ -325,13 +334,13 @@ request_limit_reached(#conn_info{request_count=RequestCount}, #config{request_li
   when is_integer(RequestLimit) ->
     RequestCount >= RequestLimit.
 
-expire_time_reached(#conn_info{expire=undefined}) ->
+expire_time_reached(#conn_info{expire_time=undefined}) ->
     false;
-expire_time_reached(#conn_info{expire=Expire}) when is_integer(Expire) ->
+expire_time_reached(#conn_info{expire_time=Expire}) when is_integer(Expire) ->
     erlang:monotonic_time() > Expire.
 
-noreply_maybe_shutdown(S=#state{clients=Tid, free=Free}) ->
-    case Free =:= [] andalso ets:info(Tid, size) =:= 0 of
+noreply_maybe_shutdown(S=#state{clients=Tid, free_queue=FreeQueue}) ->
+    case queue:is_empty(FreeQueue) andalso ets:info(Tid, size) =:= 0 of
         true -> % we're done for
             {noreply,S,?SHUTDOWN_DELAY};
         false ->

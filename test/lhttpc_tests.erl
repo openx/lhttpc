@@ -408,7 +408,10 @@ connection_timeout() ->
     ?assertEqual({0,1}, lhttpc_lb:connection_count("localhost", Port, false)),
     ?assertEqual({200, "OK"}, status(Response)),
     ?assertEqual(<<?DEFAULT_STRING>>, body(Response)),
+    lhttpc_lb:close_idle("localhost", Port, false),
+    ?assertEqual({0,1}, lhttpc_lb:connection_count("localhost", Port, false)),
     timer:sleep(100),
+    lhttpc_lb:close_idle("localhost", Port, false),
     ?assertEqual({0,0}, lhttpc_lb:connection_count("localhost", Port, false)).
 
 request_limit() ->
