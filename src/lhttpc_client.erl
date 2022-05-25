@@ -82,8 +82,8 @@ request(ReqId, From, Host, Port, Ssl, Path, Method, Hdrs, Body, StatsState, Opti
             {response, ReqId, self(), {error, Reason}};
         error:closed ->
             {response, ReqId, self(), {error, connection_closed}};
-        error:Error ->
-            {exit, ReqId, self(), {Error, erlang:get_stacktrace()}}
+        error:Error:Stacktrace ->
+            {exit, ReqId, self(), {Error, Stacktrace}}
     end,
     stats_call(StatsState, case Result of {_, _, _, {ok, _}} -> normal; _ -> error end),
     case Result of
